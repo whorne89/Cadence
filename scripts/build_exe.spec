@@ -1,0 +1,80 @@
+# -*- mode: python ; coding: utf-8 -*-
+
+block_cipher = None
+
+a = Analysis(
+    ['src\\main.py'],
+    pathex=['src'],
+    binaries=[],
+    datas=[
+        ('src\\resources', 'resources'),
+    ],
+    hiddenimports=[
+        'faster_whisper',
+        'ctranslate2',
+        'huggingface_hub',
+        'tokenizers',
+        'av',
+        'av.audio',
+        'av.audio.resampler',
+        'PySide6.QtCore',
+        'PySide6.QtGui',
+        'PySide6.QtWidgets',
+        'sounddevice',
+        'sounddevice._portaudio',
+        'pyaudiowpatch',
+        'numpy',
+        'scipy',
+        'scipy.signal',
+        'soundfile',
+        'core.audio_recorder',
+        'core.transcriber',
+        'core.streaming_transcriber',
+        'core.session_manager',
+        'gui.system_tray',
+        'gui.main_window',
+        'gui.settings_dialog',
+        'utils.config',
+        'utils.logger',
+        'utils.resource_path',
+    ],
+    hookspath=[],
+    hooksconfig={},
+    runtime_hooks=[],
+    excludes=[],
+    win_no_prefer_redirects=False,
+    win_private_assemblies=False,
+    cipher=block_cipher,
+    noarchive=False,
+)
+
+pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
+
+exe = EXE(
+    pyz,
+    a.scripts,
+    [],
+    exclude_binaries=True,
+    name='Cadence',
+    debug=False,
+    bootloader_ignore_signals=False,
+    strip=False,
+    upx=False,
+    console=False,
+    disable_windowed_traceback=False,
+    argv_emulation=False,
+    target_arch=None,
+    codesign_identity=None,
+    entitlements_file=None,
+)
+
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.zipfiles,
+    a.datas,
+    strip=False,
+    upx=False,
+    upx_exclude=[],
+    name='Cadence',
+)
