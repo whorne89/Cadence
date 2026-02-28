@@ -3,10 +3,10 @@ Settings dialog for Cadence.
 """
 
 from PySide6.QtWidgets import (
-    QDialog, QVBoxLayout, QFormLayout,
-    QComboBox, QGroupBox, QDialogButtonBox,
+    QDialog, QVBoxLayout, QFormLayout, QHBoxLayout,
+    QComboBox, QGroupBox, QDialogButtonBox, QSpinBox, QLabel,
 )
-from PySide6.QtCore import Signal, Qt
+from PySide6.QtCore import Signal
 
 
 class SettingsDialog(QDialog):
@@ -14,11 +14,10 @@ class SettingsDialog(QDialog):
 
     settings_changed = Signal()
 
-    def __init__(self, config, audio_recorder, transcriber, parent=None):
+    def __init__(self, config, audio_recorder, parent=None):
         super().__init__(parent)
         self.config = config
         self.audio_recorder = audio_recorder
-        self.transcriber = transcriber
         self.setWindowTitle("Cadence Settings")
         self.setMinimumWidth(400)
         self._setup_ui()
@@ -28,16 +27,21 @@ class SettingsDialog(QDialog):
         layout = QVBoxLayout(self)
 
         # Model settings
-        model_group = QGroupBox("Transcription Model")
+        model_group = QGroupBox("Transcription")
         model_layout = QFormLayout()
         self.streaming_model_combo = QComboBox()
         for m in ["tiny", "base", "small"]:
             self.streaming_model_combo.addItem(m.capitalize(), m)
-        model_layout.addRow("Streaming model:", self.streaming_model_combo)
-        self.reprocess_model_combo = QComboBox()
-        for m in ["tiny", "base", "small", "medium"]:
-            self.reprocess_model_combo.addItem(m.capitalize(), m)
-        model_layout.addRow("Reprocess model:", self.reprocess_model_combo)
+        model_layout.addRow("Model:", self.streaming_model_combo)
+
+        # Transcription interval
+        interval_layout = QHBoxLayout()
+        self.interval_spin = QSpinBox()
+        self.interval_spin.setRange(2, 8)
+        self.interval_spin.setSuffix(" seconds")
+        interval_layout.addWidget(self.interval_spin)
+        model_layout.addRow("Update interval:", interval_layout)
+
         model_group.setLayout(model_layout)
         layout.addWidget(model_group)
 
@@ -76,16 +80,18 @@ class SettingsDialog(QDialog):
         idx = self.streaming_model_combo.findData(streaming)
         if idx >= 0:
             self.streaming_model_combo.setCurrentIndex(idx)
-        reprocess = self.config.get_reprocess_model_size()
-        idx = self.reprocess_model_combo.findData(reprocess)
-        if idx >= 0:
-            self.reprocess_model_combo.setCurrentIndex(idx)
+        interval = int(self.config.get_transcription_interval())
+        self.interval_spin.setValue(interval)
 
     def _save_settings(self):
-        self.config.set("whisper", "streaming_model_size", value=self.streaming_model_combo.currentData())
-        self.config.set("whisper", "reprocess_model_size", value=self.reprocess_model_combo.currentData())
-        self.config.set("audio", "mic_device_index", value=self.mic_combo.currentData())
-        self.config.set("audio", "system_device_index", value=self.system_combo.currentData())
+        self.config.set("whisper", "streaming_model_size",
+                        value=self.streaming_model_combo.currentData())
+        self.config.set("whisper", "transcription_interval",
+                        value=float(self.interval_spin.value()))
+        self.config.set("audio", "mic_device_index",
+                        value=self.mic_combo.currentData())
+        self.config.set("audio", "system_device_index",
+                        value=self.system_combo.currentData())
         self.config.save()
         self.settings_changed.emit()
         self.accept()
