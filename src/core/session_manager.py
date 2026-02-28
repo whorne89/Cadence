@@ -4,6 +4,7 @@ Manages transcript folders and .txt file persistence.
 """
 
 import logging
+import re
 import shutil
 from datetime import datetime
 from pathlib import Path
@@ -22,6 +23,10 @@ class SessionManager:
             self.sessions_dir = Path(sessions_dir)
         self.sessions_dir.mkdir(parents=True, exist_ok=True)
 
+    def _sanitize_name(self, name):
+        """Remove characters invalid in Windows filenames."""
+        return re.sub(r'[<>:"/\\|?*]', '_', name.strip())
+
     # --- Folder operations ---
 
     def list_folders(self):
@@ -33,17 +38,23 @@ class SessionManager:
 
     def create_folder(self, name):
         """Create a new folder."""
+        name = self._sanitize_name(name)
         folder = self.sessions_dir / name
         folder.mkdir(parents=True, exist_ok=True)
         logger.info(f"Folder created: {name}")
 
     def rename_folder(self, old_name, new_name):
         """Rename a folder."""
+        new_name = self._sanitize_name(new_name)
         old = self.sessions_dir / old_name
         new = self.sessions_dir / new_name
         if old.exists():
+            if new.exists():
+                raise FileExistsError(f"Folder '{new_name}' already exists")
             old.rename(new)
             logger.info(f"Folder renamed: {old_name} -> {new_name}")
+        else:
+            logger.warning(f"Cannot rename folder: '{old_name}' does not exist")
 
     def delete_folder(self, name):
         """Delete a folder and all its contents."""
@@ -51,6 +62,8 @@ class SessionManager:
         if folder.exists():
             shutil.rmtree(folder)
             logger.info(f"Folder deleted: {name}")
+        else:
+            logger.warning(f"Cannot delete folder: '{name}' does not exist")
 
     # --- Transcript operations ---
 
@@ -67,6 +80,8 @@ class SessionManager:
 
         if name is None:
             name = f"Recording {datetime.now().strftime('%H-%M')}"
+        else:
+            name = self._sanitize_name(name)
 
         filepath = folder_path / f"{name}.txt"
         # Avoid collisions
@@ -180,11 +195,16 @@ class SessionManager:
 
     def rename_transcript(self, folder, old_name, new_name):
         """Rename a transcript file."""
+        new_name = self._sanitize_name(new_name)
         old = self.sessions_dir / folder / f"{old_name}.txt"
         new = self.sessions_dir / folder / f"{new_name}.txt"
         if old.exists():
+            if new.exists():
+                raise FileExistsError(f"Transcript '{new_name}' already exists")
             old.rename(new)
             logger.info(f"Transcript renamed: {old_name} -> {new_name}")
+        else:
+            logger.warning(f"Cannot rename transcript: '{old_name}' does not exist in '{folder}'")
 
     def move_transcript(self, src_folder, name, dest_folder):
         """Move a transcript to a different folder."""
@@ -193,8 +213,12 @@ class SessionManager:
         dest_dir.mkdir(parents=True, exist_ok=True)
         dest = dest_dir / f"{name}.txt"
         if src.exists():
+            if dest.exists():
+                raise FileExistsError(f"Transcript '{name}' already exists in '{dest_folder}'")
             src.rename(dest)
             logger.info(f"Transcript moved: {src_folder}/{name} -> {dest_folder}/{name}")
+        else:
+            logger.warning(f"Cannot move transcript: '{name}' does not exist in '{src_folder}'")
 
     def delete_transcript(self, folder, name):
         """Delete a transcript file."""
@@ -202,3 +226,5 @@ class SessionManager:
         if filepath.exists():
             filepath.unlink()
             logger.info(f"Transcript deleted: {folder}/{name}")
+        else:
+            logger.warning(f"Cannot delete transcript: '{name}' does not exist in '{folder}'")

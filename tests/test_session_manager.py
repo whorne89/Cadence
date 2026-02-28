@@ -103,3 +103,120 @@ def test_delete_transcript(sm):
     name = p.stem
     sm.delete_transcript(folder, name)
     assert len(sm.list_transcripts(folder)) == 0
+
+
+# --- Sanitization tests ---
+
+def test_sanitize_name_strips_invalid_chars(sm):
+    result = sm._sanitize_name('Meeting: "Q1 <Review> | 2026"')
+    assert "<" not in result
+    assert ">" not in result
+    assert ":" not in result
+    assert '"' not in result
+    assert "|" not in result
+    assert result == "Meeting_ _Q1 _Review_ _ 2026_"
+
+
+def test_sanitize_name_strips_whitespace(sm):
+    result = sm._sanitize_name("  hello  ")
+    assert result == "hello"
+
+
+def test_create_folder_sanitizes_name(sm):
+    sm.create_folder('Project: "Alpha"')
+    folders = sm.list_folders()
+    assert any("Project" in f for f in folders)
+    assert not any('"' in f for f in folders)
+    assert not any(':' in f for f in folders)
+
+
+def test_save_transcript_sanitizes_name(sm):
+    segments = [{"speaker": "you", "text": "Hello", "start": 0.0}]
+    path = sm.save_transcript(segments, duration=10.0, model="base", folder="test", name='Meeting: "Q1"')
+    p = Path(path)
+    assert ":" not in p.stem
+    assert '"' not in p.stem
+
+
+def test_rename_folder_sanitizes_new_name(sm):
+    sm.create_folder("Old")
+    sm.rename_folder("Old", 'New: "Name"')
+    folders = sm.list_folders()
+    assert "Old" not in folders
+    assert any("New" in f for f in folders)
+    assert not any('"' in f for f in folders)
+
+
+def test_rename_transcript_sanitizes_new_name(sm):
+    segments = [{"speaker": "you", "text": "Hello", "start": 0.0}]
+    path = sm.save_transcript(segments, duration=10.0, model="base", folder="test", name="original")
+    sm.rename_transcript("test", "original", 'New: "Name"')
+    transcripts = sm.list_transcripts("test")
+    names = [t["name"] for t in transcripts]
+    assert not any('"' in n for n in names)
+    assert not any(':' in n for n in names)
+
+
+# --- FileExistsError tests ---
+
+def test_rename_folder_raises_if_dest_exists(sm):
+    sm.create_folder("Alpha")
+    sm.create_folder("Beta")
+    with pytest.raises(FileExistsError, match="already exists"):
+        sm.rename_folder("Alpha", "Beta")
+
+
+def test_rename_transcript_raises_if_dest_exists(sm):
+    segments = [{"speaker": "you", "text": "Hello", "start": 0.0}]
+    sm.save_transcript(segments, duration=10.0, model="base", folder="test", name="first")
+    sm.save_transcript(segments, duration=10.0, model="base", folder="test", name="second")
+    with pytest.raises(FileExistsError, match="already exists"):
+        sm.rename_transcript("test", "first", "second")
+
+
+def test_move_transcript_raises_if_dest_exists(sm):
+    segments = [{"speaker": "you", "text": "Hello", "start": 0.0}]
+    sm.save_transcript(segments, duration=10.0, model="base", folder="src", name="file")
+    sm.save_transcript(segments, duration=10.0, model="base", folder="dest", name="file")
+    with pytest.raises(FileExistsError, match="already exists"):
+        sm.move_transcript("src", "file", "dest")
+
+
+# --- Warning log tests ---
+
+def test_rename_folder_warns_if_source_missing(sm, caplog):
+    import logging
+    with caplog.at_level(logging.WARNING, logger="Cadence"):
+        sm.rename_folder("nonexistent", "new")
+    assert "does not exist" in caplog.text
+
+
+def test_delete_folder_warns_if_missing(sm, caplog):
+    import logging
+    with caplog.at_level(logging.WARNING, logger="Cadence"):
+        sm.delete_folder("nonexistent")
+    assert "does not exist" in caplog.text
+
+
+def test_rename_transcript_warns_if_source_missing(sm, caplog):
+    import logging
+    sm.create_folder("test")
+    with caplog.at_level(logging.WARNING, logger="Cadence"):
+        sm.rename_transcript("test", "nonexistent", "new")
+    assert "does not exist" in caplog.text
+
+
+def test_move_transcript_warns_if_source_missing(sm, caplog):
+    import logging
+    sm.create_folder("dest")
+    with caplog.at_level(logging.WARNING, logger="Cadence"):
+        sm.move_transcript("src", "nonexistent", "dest")
+    assert "does not exist" in caplog.text
+
+
+def test_delete_transcript_warns_if_missing(sm, caplog):
+    import logging
+    sm.create_folder("test")
+    with caplog.at_level(logging.WARNING, logger="Cadence"):
+        sm.delete_transcript("test", "nonexistent")
+    assert "does not exist" in caplog.text
