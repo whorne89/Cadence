@@ -158,7 +158,6 @@ class MainWindow(QMainWindow):
         self.record_btn.setText("Stop Recording")
         self.record_btn.setStyleSheet("background-color: #dc3232; color: white;")
         self.status_label.setText("Recording...")
-        self.transcript_area.clear()
         self._timer.start(1000)
 
     def set_idle_state(self):
@@ -169,6 +168,7 @@ class MainWindow(QMainWindow):
         self._timer.stop()
 
     def set_done_state(self):
+        self._recording = False
         self.record_btn.setEnabled(True)
         self.record_btn.setText("Start Recording")
         self.record_btn.setStyleSheet("")
@@ -212,8 +212,14 @@ class MainWindow(QMainWindow):
     # --- Clear / Copy ---
 
     def _on_clear(self):
-        self.transcript_area.clear()
-        self._update_word_count()
+        if not self.transcript_area.toPlainText().strip():
+            return
+        reply = QMessageBox.question(
+            self, "Clear Transcript",
+            "Are you sure you want to clear the transcript?")
+        if reply == QMessageBox.StandardButton.Yes:
+            self.transcript_area.clear()
+            self._update_word_count()
 
     def _on_copy(self):
         from PySide6.QtWidgets import QApplication
