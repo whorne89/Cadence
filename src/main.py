@@ -119,18 +119,27 @@ class TranscriptionWorker(QObject):
 
                     # Echo gate: suppress mic if it's just system audio bleed
                     echo_detected = False
-                    if sys_detector._has_had_speech:
-                        mic_audio = np.concatenate(speech_frames)
-                        mic_end_sample = mic_start_sample + len(mic_audio)
-                        sys_audio = get_audio_for_sample_range(
-                            self.audio_recorder._system_frames,
-                            mic_start_sample, mic_end_sample,
-                        )
-                        if len(sys_audio) > 0:
-                            echo_detected = is_echo(mic_audio, sys_audio)
+                    mic_audio = np.concatenate(speech_frames)
+                    mic_end_sample = mic_start_sample + len(mic_audio)
+                    sys_audio = get_audio_for_sample_range(
+                        self.audio_recorder._system_frames,
+                        mic_start_sample, mic_end_sample,
+                    )
+                    # Only check if system audio has meaningful energy
+                    if len(sys_audio) > 0:
+                        sys_rms = float(np.sqrt(np.mean(sys_audio.astype(np.float64) ** 2)))
+                        if sys_rms > 0.005:
+                            echo_detected, corr = is_echo(
+                                mic_audio, sys_audio, detail=True,
+                            )
+                            logger.info(
+                                f"Echo gate at {timestamp:.1f}s: "
+                                f"corr={corr:.3f}, detected={echo_detected}, "
+                                f"sys_rms={sys_rms:.4f}"
+                            )
 
                     if echo_detected:
-                        logger.debug(f"Echo suppressed at {timestamp:.1f}s")
+                        logger.info(f"Echo suppressed at {timestamp:.1f}s")
                     else:
                         self._transcribe_frames(speech_frames, "you", timestamp)
 

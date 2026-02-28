@@ -25,7 +25,7 @@ def _energy_envelope(audio, window_ms=20, sample_rate=16000):
     return np.sqrt(np.mean(blocks ** 2, axis=1))
 
 
-def is_echo(mic_audio, sys_audio, threshold=0.6, sample_rate=16000):
+def is_echo(mic_audio, sys_audio, threshold=0.6, sample_rate=16000, detail=False):
     """
     Check if mic audio is echo of system audio using energy envelope
     correlation.
@@ -46,19 +46,23 @@ def is_echo(mic_audio, sys_audio, threshold=0.6, sample_rate=16000):
         sys_audio: System audio chunk from same time window
         threshold: Envelope correlation above which echo is detected
         sample_rate: Audio sample rate in Hz
+        detail: If True, return (bool, correlation) tuple
 
     Returns:
-        bool: True if mic audio appears to be echo of system audio
+        bool (or tuple if detail=True): True if mic audio appears to be echo
     """
+    def _result(detected, corr=0.0):
+        return (detected, corr) if detail else detected
+
     # Need at least 200ms for meaningful envelope comparison
     min_samples = int(sample_rate * 0.2)
     if len(mic_audio) < min_samples or len(sys_audio) < min_samples:
-        return False
+        return _result(False)
 
     # If system audio is too quiet, it can't cause audible echo
     sys_rms = np.sqrt(np.mean(sys_audio.astype(np.float64) ** 2))
     if sys_rms < 0.005:
-        return False
+        return _result(False)
 
     # Compute energy envelopes
     mic_env = _energy_envelope(mic_audio, sample_rate=sample_rate)
@@ -66,7 +70,7 @@ def is_echo(mic_audio, sys_audio, threshold=0.6, sample_rate=16000):
 
     min_len = min(len(mic_env), len(sys_env))
     if min_len < 5:
-        return False
+        return _result(False)
 
     m = mic_env[:min_len]
     s = sys_env[:min_len]
@@ -78,10 +82,10 @@ def is_echo(mic_audio, sys_audio, threshold=0.6, sample_rate=16000):
     s_std = s_c.std()
 
     if m_std < 1e-8 or s_std < 1e-8:
-        return False
+        return _result(False)
 
-    correlation = np.mean(m_c * s_c) / (m_std * s_std)
-    return bool(abs(correlation) > threshold)
+    correlation = float(np.mean(m_c * s_c) / (m_std * s_std))
+    return _result(bool(abs(correlation) > threshold), correlation)
 
 
 def get_audio_for_sample_range(frames, start_sample, end_sample):
