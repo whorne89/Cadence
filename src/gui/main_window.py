@@ -44,15 +44,31 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(central)
         layout.setContentsMargins(4, 4, 4, 4)
 
-        # Header with timer and status
+        # Header: status badge | timer | word count
         header = QHBoxLayout()
-        self.status_label = QLabel("Ready")
-        self.status_label.setFont(QFont("Segoe UI", 12, QFont.Weight.Bold))
+        header.setContentsMargins(4, 4, 4, 4)
+
+        self.status_label = QLabel("READY")
+        self.status_label.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
+        self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.status_label.setFixedHeight(28)
+        self.status_label.setMinimumWidth(100)
+        self._set_status_badge("idle")
         header.addWidget(self.status_label)
+
         header.addStretch()
+
         self.timer_label = QLabel("00:00:00")
         self.timer_label.setFont(QFont("Consolas", 14))
         header.addWidget(self.timer_label)
+
+        header.addStretch()
+
+        self.info_label = QLabel("0 words")
+        self.info_label.setFont(QFont("Segoe UI", 10))
+        self.info_label.setStyleSheet("color: #888;")
+        header.addWidget(self.info_label)
+
         layout.addLayout(header)
 
         # Separator
@@ -135,14 +151,26 @@ class MainWindow(QMainWindow):
 
         layout.addLayout(controls)
 
-        # Word count
-        self.info_label = QLabel("")
-        self.info_label.setAlignment(Qt.AlignmentFlag.AlignRight)
-        layout.addWidget(self.info_label)
-
     def _setup_timer(self):
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._update_timer)
+
+    # --- Status badge ---
+
+    def _set_status_badge(self, state):
+        """Set the status badge style. States: idle, recording, done."""
+        styles = {
+            "idle": (
+                "background-color: #555; color: #ccc; border-radius: 4px; padding: 2px 12px;"
+            ),
+            "recording": (
+                "background-color: #dc3232; color: white; border-radius: 4px; padding: 2px 12px;"
+            ),
+            "done": (
+                "background-color: #2ea043; color: white; border-radius: 4px; padding: 2px 12px;"
+            ),
+        }
+        self.status_label.setStyleSheet(styles.get(state, styles["idle"]))
 
     # --- Recording state ---
 
@@ -157,14 +185,16 @@ class MainWindow(QMainWindow):
         self._start_time = time.time()
         self.record_btn.setText("Stop Recording")
         self.record_btn.setStyleSheet("background-color: #dc3232; color: white;")
-        self.status_label.setText("Recording...")
+        self.status_label.setText("RECORDING")
+        self._set_status_badge("recording")
         self._timer.start(1000)
 
     def set_idle_state(self):
         self._recording = False
         self.record_btn.setText("Start Recording")
         self.record_btn.setStyleSheet("")
-        self.status_label.setText("Ready")
+        self.status_label.setText("READY")
+        self._set_status_badge("idle")
         self._timer.stop()
 
     def set_done_state(self):
@@ -172,7 +202,8 @@ class MainWindow(QMainWindow):
         self.record_btn.setEnabled(True)
         self.record_btn.setText("Start Recording")
         self.record_btn.setStyleSheet("")
-        self.status_label.setText("Done")
+        self.status_label.setText("DONE")
+        self._set_status_badge("done")
         self._timer.stop()
 
     # --- Transcript display ---
