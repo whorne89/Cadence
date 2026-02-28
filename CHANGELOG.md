@@ -17,6 +17,8 @@ All notable changes to Cadence are documented here.
 - Auto-detect option for mic and system audio devices
 
 ### Fixed
+- Live echo gate was never running due to silence detector reset bug
+- Echo dedup switched from SequenceMatcher to word overlap for better accuracy
 - System audio now uses default WASAPI loopback instead of first device found
 - Silent channel flooding in TranscriptionWorker
 - Live transcript preserved when post-processing fails
