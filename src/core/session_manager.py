@@ -17,7 +17,7 @@ class SessionManager:
 
     def __init__(self, sessions_dir=None):
         if sessions_dir is None:
-            from ..utils.resource_path import get_app_data_path
+            from utils.resource_path import get_app_data_path
             self.sessions_dir = Path(get_app_data_path("sessions"))
         else:
             self.sessions_dir = Path(sessions_dir)

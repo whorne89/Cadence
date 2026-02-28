@@ -113,26 +113,16 @@ class AudioRecorder:
     def _record_mic(self):
         """Record from microphone via sounddevice."""
         chunk_samples = int(self.sample_rate * self.chunk_duration)
-        buffer = []
+        audio_queue = queue.Queue()
 
         def callback(indata, frames, time_info, status):
             if status:
                 logger.warning(f"Mic status: {status}")
-            audio = indata[:, 0].copy()
-            self._mic_frames.append(audio.copy())
-            buffer.append(audio.copy())
-
-            total = sum(len(b) for b in buffer)
-            if total >= chunk_samples:
-                chunk = np.concatenate(buffer)[:chunk_samples]
-                buffer.clear()
-                if self.chunk_callback:
-                    try:
-                        self.chunk_callback(chunk, "mic")
-                    except Exception as e:
-                        logger.error(f"Mic chunk callback error: {e}")
+            audio_queue.put(indata[:, 0].copy())
 
         try:
+            buffer = []
+            buffer_len = 0
             with sd.InputStream(
                 samplerate=self.sample_rate,
                 channels=1,
@@ -142,7 +132,24 @@ class AudioRecorder:
                 blocksize=1024,
             ):
                 while self.is_recording:
-                    time.sleep(0.05)
+                    try:
+                        audio = audio_queue.get(timeout=0.1)
+                    except queue.Empty:
+                        continue
+
+                    self._mic_frames.append(audio)
+                    buffer.append(audio)
+                    buffer_len += len(audio)
+
+                    if buffer_len >= chunk_samples:
+                        chunk = np.concatenate(buffer)[:chunk_samples]
+                        buffer.clear()
+                        buffer_len = 0
+                        if self.chunk_callback:
+                            try:
+                                self.chunk_callback(chunk, "mic")
+                            except Exception as e:
+                                logger.error(f"Mic chunk callback error: {e}")
         except Exception as e:
             logger.error(f"Mic recording error: {e}")
 

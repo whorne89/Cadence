@@ -117,8 +117,8 @@ class MainWindow(QMainWindow):
         self.reprocess_btn.setEnabled(True)
         self._timer.stop()
 
-    def append_segment(self, speaker, text):
-        """Append a transcript segment with speaker label."""
+    def append_segment(self, speaker, text, timestamp=0.0):
+        """Append a transcript segment with speaker label and timestamp."""
         cursor = self.transcript_area.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.End)
         if speaker == "you":
@@ -127,7 +127,14 @@ class MainWindow(QMainWindow):
         else:
             label = "Them"
             color = "#d94a4a"
-        cursor.insertHtml(f'<b style="color:{color}">{label}:</b> {text}<br>')
+        # Format timestamp as MM:SS
+        mins = int(timestamp) // 60
+        secs = int(timestamp) % 60
+        ts_str = f"{mins:02d}:{secs:02d}"
+        cursor.insertHtml(
+            f'<span style="color:#888; font-size:10px">[{ts_str}]</span> '
+            f'<b style="color:{color}">{label}:</b> {text}<br>'
+        )
         self.transcript_area.setTextCursor(cursor)
         self.transcript_area.ensureCursorVisible()
         text_content = self.transcript_area.toPlainText()
@@ -138,7 +145,7 @@ class MainWindow(QMainWindow):
         """Replace transcript with full list of segments."""
         self.transcript_area.clear()
         for seg in segments:
-            self.append_segment(seg["speaker"], seg["text"])
+            self.append_segment(seg["speaker"], seg["text"], seg.get("start", 0.0))
 
     def _update_timer(self):
         elapsed = int(time.time() - self._start_time)

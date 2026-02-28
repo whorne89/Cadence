@@ -7,6 +7,7 @@ import sys
 import os
 import ctypes
 import logging
+import time
 
 from PySide6.QtWidgets import QApplication
 from PySide6.QtCore import QObject, Signal, QThread, Qt
@@ -22,38 +23,94 @@ def set_windows_app_id():
         pass  # Not on Windows or API not available
 
 
-# Handle imports for both package mode (src.main:main) and direct execution
-try:
-    from .core.audio_recorder import AudioRecorder
-    from .core.transcriber import Transcriber
-    from .core.streaming_transcriber import StreamingTranscriber
-    from .core.session_manager import SessionManager
-    from .gui.system_tray import SystemTrayIcon
-    from .gui.main_window import MainWindow
-    from .gui.settings_dialog import SettingsDialog
-    from .utils.config import ConfigManager
-    from .utils.logger import setup_logger
-    from .utils.resource_path import get_app_data_path
-except ImportError:
-    # Direct execution: ensure parent directory is on sys.path
-    _src_dir = os.path.dirname(os.path.abspath(__file__))
-    _project_dir = os.path.dirname(_src_dir)
-    if _project_dir not in sys.path:
-        sys.path.insert(0, _project_dir)
-
-    from src.core.audio_recorder import AudioRecorder
-    from src.core.transcriber import Transcriber
-    from src.core.streaming_transcriber import StreamingTranscriber
-    from src.core.session_manager import SessionManager
-    from src.gui.system_tray import SystemTrayIcon
-    from src.gui.main_window import MainWindow
-    from src.gui.settings_dialog import SettingsDialog
-    from src.utils.config import ConfigManager
-    from src.utils.logger import setup_logger
-    from src.utils.resource_path import get_app_data_path
+from core.audio_recorder import AudioRecorder
+from core.transcriber import Transcriber
+from core.session_manager import SessionManager
+from gui.system_tray import SystemTrayIcon
+from gui.main_window import MainWindow
+from gui.settings_dialog import SettingsDialog
+from utils.config import ConfigManager
+from utils.logger import setup_logger
+from utils.resource_path import get_app_data_path
 
 
 logger = logging.getLogger("Cadence")
+
+
+class TranscriptionWorker(QObject):
+    """
+    Worker that periodically transcribes accumulated audio from AudioRecorder.
+
+    Runs in a QThread. Reads new frames from the recorder's frame lists,
+    transcribes them, and emits results via Qt signals (thread-safe).
+    """
+
+    segment_ready = Signal(str, str, float)  # speaker, text, timestamp_seconds
+    finished = Signal()
+
+    def __init__(self, transcriber, audio_recorder, interval=5.0):
+        super().__init__()
+        self.transcriber = transcriber
+        self.audio_recorder = audio_recorder
+        self.interval = interval
+        self._running = False
+        self._mic_offset = 0
+        self._system_offset = 0
+
+    def run(self):
+        """Main loop — polls for new audio and transcribes it."""
+        self._running = True
+        self._mic_offset = 0
+        self._system_offset = 0
+
+        logger.info(f"Transcription worker started (interval={self.interval}s)")
+
+        while self._running:
+            time.sleep(self.interval)
+
+            if not self._running:
+                break
+
+            # Transcribe new mic audio
+            mic_frames = self.audio_recorder._mic_frames
+            mic_len = len(mic_frames)
+            if mic_len > self._mic_offset:
+                new_frames = mic_frames[self._mic_offset:mic_len]
+                # Compute timestamp: samples before this chunk / sample_rate
+                prev_samples = sum(len(f) for f in mic_frames[:self._mic_offset])
+                timestamp = prev_samples / self.audio_recorder.sample_rate
+                self._mic_offset = mic_len
+                try:
+                    audio = np.concatenate(new_frames)
+                    if len(audio) > 0:
+                        text = self.transcriber.transcribe_text(audio)
+                        if text and text.strip():
+                            self.segment_ready.emit("you", text.strip(), timestamp)
+                except Exception as e:
+                    logger.error(f"Mic transcription error: {e}")
+
+            # Transcribe new system audio
+            sys_frames = self.audio_recorder._system_frames
+            sys_len = len(sys_frames)
+            if sys_len > self._system_offset:
+                new_frames = sys_frames[self._system_offset:sys_len]
+                prev_samples = sum(len(f) for f in sys_frames[:self._system_offset])
+                timestamp = prev_samples / self.audio_recorder.sample_rate
+                self._system_offset = sys_len
+                try:
+                    audio = np.concatenate(new_frames)
+                    if len(audio) > 0:
+                        text = self.transcriber.transcribe_text(audio)
+                        if text and text.strip():
+                            self.segment_ready.emit("them", text.strip(), timestamp)
+                except Exception as e:
+                    logger.error(f"System transcription error: {e}")
+
+        logger.info("Transcription worker stopped")
+        self.finished.emit()
+
+    def stop(self):
+        self._running = False
 
 
 class ReprocessWorker(QObject):
@@ -116,10 +173,8 @@ class CadenceApp(QObject):
         # Session management
         self.session_manager = SessionManager()
 
-        # Audio recorder with chunk callback for real-time streaming
-        self.audio_recorder = AudioRecorder(
-            chunk_callback=self._on_audio_chunk,
-        )
+        # Audio recorder — no callback, just records
+        self.audio_recorder = AudioRecorder()
 
         # Apply saved audio device settings
         mic_device = self.config.get_mic_device()
@@ -137,13 +192,13 @@ class CadenceApp(QObject):
         reprocess_model_size = self.config.get_reprocess_model_size()
         self.reprocess_transcriber = Transcriber(model_size=reprocess_model_size)
 
-        # Two StreamingTranscriber instances: one for mic, one for system audio
-        self.mic_streamer = StreamingTranscriber(self.streaming_transcriber)
-        self.system_streamer = StreamingTranscriber(self.streaming_transcriber)
-
         # GUI components (set after creation in main())
         self.tray_icon = None
         self.main_window = None
+
+        # Transcription worker thread state
+        self._transcription_thread = None
+        self._transcription_worker = None
 
         # Reprocessing thread state
         self._reprocess_thread = None
@@ -155,47 +210,18 @@ class CadenceApp(QObject):
 
         self.logger.info("Application initialized")
 
-    def _on_audio_chunk(self, chunk, source):
+    def _on_segment(self, speaker, text, timestamp):
         """
-        Callback from AudioRecorder. Routes audio chunks to the
-        appropriate StreamingTranscriber based on source.
-
-        Args:
-            chunk: numpy float32 array of audio samples
-            source: "mic" or "system"
+        Handle a transcript segment from the transcription worker.
+        Called on the main thread via Qt signal (thread-safe).
         """
-        try:
-            if source == "mic":
-                result = self.mic_streamer.process_chunk(chunk)
-                if result["confirmed"]:
-                    self._on_segment("you", result["confirmed"])
-            elif source == "system":
-                result = self.system_streamer.process_chunk(chunk)
-                if result["confirmed"]:
-                    self._on_segment("them", result["confirmed"])
-        except Exception as e:
-            self.logger.error(f"Error processing audio chunk ({source}): {e}")
-
-    def _on_segment(self, speaker, text):
-        """
-        Handle a confirmed transcript segment.
-        Adds it to the session and updates the main window.
-
-        Args:
-            speaker: "you" or "them"
-            text: confirmed transcript text
-        """
-        self.session_manager.add_segment(speaker, text)
+        self.session_manager.add_segment(speaker, text, start=timestamp)
         if self.main_window is not None:
-            self.main_window.append_segment(speaker, text)
+            self.main_window.append_segment(speaker, text, timestamp)
 
     def start_recording(self):
         """Start a new recording session."""
         self.logger.info("Starting recording...")
-
-        # Reset streaming transcribers for a fresh session
-        self.mic_streamer.reset()
-        self.system_streamer.reset()
 
         # Create a new session
         self.session_manager.create_session()
@@ -204,6 +230,9 @@ class CadenceApp(QObject):
         # Start audio capture
         self.audio_recorder.start_recording()
 
+        # Start transcription worker in a QThread
+        self._start_transcription_worker()
+
         # Update UI
         if self.main_window is not None:
             self.main_window.set_recording_state()
@@ -211,9 +240,53 @@ class CadenceApp(QObject):
             self.tray_icon.set_recording_state()
             self.tray_icon.show_notification("Recording", "Recording started")
 
+    def _start_transcription_worker(self):
+        """Launch the transcription worker in a background QThread."""
+        # Clean up any previous worker
+        self._stop_transcription_worker()
+
+        self._transcription_thread = QThread()
+        self._transcription_worker = TranscriptionWorker(
+            self.streaming_transcriber,
+            self.audio_recorder,
+            interval=5.0,
+        )
+        self._transcription_worker.moveToThread(self._transcription_thread)
+
+        # Connect signals
+        self._transcription_thread.started.connect(self._transcription_worker.run)
+        self._transcription_worker.segment_ready.connect(self._on_segment)
+        self._transcription_worker.finished.connect(
+            self._cleanup_transcription_thread, Qt.ConnectionType.QueuedConnection
+        )
+
+        self._transcription_thread.start()
+
+    def _stop_transcription_worker(self):
+        """Signal the transcription worker to stop."""
+        if self._transcription_worker is not None:
+            self._transcription_worker.stop()
+        if self._transcription_thread is not None and self._transcription_thread.isRunning():
+            self._transcription_thread.quit()
+            self._transcription_thread.wait(3000)
+
+    def _cleanup_transcription_thread(self):
+        """Clean up transcription thread resources."""
+        if self._transcription_thread is not None:
+            self._transcription_thread.quit()
+            self._transcription_thread.wait(2000)
+            self._transcription_thread.deleteLater()
+            self._transcription_thread = None
+        if self._transcription_worker is not None:
+            self._transcription_worker.deleteLater()
+            self._transcription_worker = None
+
     def stop_recording(self):
         """Stop recording, finalize transcription, and save the session."""
         self.logger.info("Stopping recording...")
+
+        # Stop transcription worker first
+        self._stop_transcription_worker()
 
         # Stop audio capture and get raw audio
         mic_audio, system_audio = self.audio_recorder.stop_recording()
@@ -222,18 +295,6 @@ class CadenceApp(QObject):
         # Save raw audio for potential reprocessing
         self._mic_audio = mic_audio
         self._system_audio = system_audio
-
-        # Finalize streaming transcribers (flush remaining buffers)
-        mic_final = self.mic_streamer.finalize()
-        system_final = self.system_streamer.finalize()
-
-        # Add any remaining finalized text as segments
-        if mic_final and mic_final != self.mic_streamer.get_full_transcript():
-            # finalize() already appends to confirmed_text, so only add
-            # the tail that wasn't already delivered via _on_segment
-            pass
-        if system_final and system_final != self.system_streamer.get_full_transcript():
-            pass
 
         # Update session duration
         self.session_manager.set_duration(duration)
@@ -413,6 +474,9 @@ class CadenceApp(QObject):
     def quit(self):
         """Clean shutdown of the application."""
         self.logger.info("Shutting down Cadence...")
+
+        # Stop transcription worker
+        self._stop_transcription_worker()
 
         # Stop recording if active
         if self.audio_recorder.is_recording:

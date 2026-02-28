@@ -6,7 +6,7 @@ import logging
 from pathlib import Path
 from logging.handlers import RotatingFileHandler
 
-from .resource_path import get_app_data_path
+from utils.resource_path import get_app_data_path
 
 
 def setup_logger(name="Cadence", log_dir=None, level=logging.INFO):

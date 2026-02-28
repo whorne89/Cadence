@@ -6,7 +6,7 @@ from PySide6.QtWidgets import QSystemTrayIcon, QMenu, QMessageBox
 from PySide6.QtGui import QIcon, QPixmap, QPainter, QColor, QAction
 from PySide6.QtCore import Signal, Qt
 
-from ..utils.resource_path import get_resource_path
+from utils.resource_path import get_resource_path
 from pathlib import Path
 
 
@@ -24,9 +24,9 @@ class SystemTrayIcon(QSystemTrayIcon):
         self._is_recording = False
         self.icon_dir = Path(get_resource_path("icons"))
         self._create_icons()
+        self._create_menu()
         self.set_idle_state()
         self.setToolTip("Cadence - Meeting Transcription")
-        self._create_menu()
         self.activated.connect(self._on_activated)
         self.show()
 

@@ -6,7 +6,7 @@ import copy
 import json
 from pathlib import Path
 
-from .resource_path import get_app_data_path
+from utils.resource_path import get_app_data_path
 
 
 class ConfigManager:
