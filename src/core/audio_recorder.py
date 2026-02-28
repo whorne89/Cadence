@@ -147,12 +147,13 @@ class AudioRecorder:
         try:
             device_index = self._system_device
             if device_index is None:
-                wasapi_info = p.get_host_api_info_by_type(pyaudio.paWASAPI)
-                for i in range(p.get_device_count()):
-                    dev = p.get_device_info_by_index(i)
-                    if dev.get('isLoopbackDevice', False) and dev['hostApi'] == wasapi_info['index']:
-                        device_index = i
-                        break
+                try:
+                    default_loopback = p.get_default_wasapi_loopback()
+                    device_index = default_loopback['index']
+                    logger.info(f"Auto-detected loopback device: {default_loopback['name']}")
+                except Exception:
+                    logger.warning("No default WASAPI loopback device found")
+                    return
 
             if device_index is None:
                 logger.warning("No WASAPI loopback device found")
