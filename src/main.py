@@ -507,7 +507,8 @@ class CadenceApp(QObject):
     def on_folder_selected(self, folder_name):
         """Load and display transcripts for the selected folder."""
         self._selected_folder = folder_name
-        transcripts = self.session_manager.list_transcripts(folder_name)
+        sort_desc = self.main_window._sort_descending if self.main_window else True
+        transcripts = self.session_manager.list_transcripts(folder_name, sort_descending=sort_desc)
         if self.main_window:
             self.main_window.set_transcripts(transcripts)
 
@@ -550,6 +551,11 @@ class CadenceApp(QObject):
         """Move a transcript to another folder and refresh the transcript list."""
         self.session_manager.move_transcript(src_folder, name, dest_folder)
         self.on_folder_selected(src_folder)
+
+    def on_sort_order_changed(self, descending):
+        """Re-sort the transcript list when sort order changes."""
+        if self._selected_folder:
+            self.on_folder_selected(self._selected_folder)
 
     def _refresh_folders(self):
         """Refresh the folder list in the main window."""
@@ -625,6 +631,7 @@ def main():
     main_window.transcript_renamed.connect(cadence_app.on_transcript_renamed)
     main_window.transcript_deleted.connect(cadence_app.on_transcript_deleted)
     main_window.transcript_moved.connect(cadence_app.on_transcript_moved)
+    main_window.sort_order_changed.connect(cadence_app.on_sort_order_changed)
     main_window.settings_requested.connect(cadence_app.show_settings)
 
     # Load folders on startup

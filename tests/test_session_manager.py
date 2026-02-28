@@ -71,6 +71,30 @@ def test_list_transcripts(sm):
     assert len(transcripts) >= 1
 
 
+def test_list_transcripts_sorted_by_date(sm):
+    """Transcripts should sort by date in file, not filename."""
+    folder = "test-sort"
+    sm.create_folder(folder)
+    # Create files with explicit date headers (older first)
+    folder_path = sm.sessions_dir / folder
+    (folder_path / "zzz.txt").write_text(
+        "Cadence Transcript\nDate: 2026-01-01 09:00\nDuration: 00:00:10\nModel: base\n\n---\n",
+        encoding="utf-8",
+    )
+    (folder_path / "aaa.txt").write_text(
+        "Cadence Transcript\nDate: 2026-02-15 14:30\nDuration: 00:00:10\nModel: base\n\n---\n",
+        encoding="utf-8",
+    )
+    # Descending (newest first) — aaa (Feb) before zzz (Jan)
+    desc = sm.list_transcripts(folder, sort_descending=True)
+    assert desc[0]["name"] == "aaa"
+    assert desc[1]["name"] == "zzz"
+    # Ascending (oldest first) — zzz (Jan) before aaa (Feb)
+    asc = sm.list_transcripts(folder, sort_descending=False)
+    assert asc[0]["name"] == "zzz"
+    assert asc[1]["name"] == "aaa"
+
+
 def test_rename_transcript(sm):
     segments = [{"speaker": "you", "text": "Hello", "start": 0.0}]
     path = sm.save_transcript(segments, duration=10.0, model="base")

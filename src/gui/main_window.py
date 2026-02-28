@@ -139,6 +139,32 @@ def _icon_plus(sz=10):
     return _paint_icon(sz, draw, pen_width=1.5)
 
 
+def _icon_sort_desc(sz=12):
+    """Down arrow — newest first."""
+    def draw(p, s):
+        m = s * 0.25
+        mid = s * 0.5
+        # Arrow shaft
+        p.drawLine(QPointF(mid, m), QPointF(mid, s - m))
+        # Arrow head
+        p.drawLine(QPointF(mid, s - m), QPointF(m + s * 0.05, s * 0.55))
+        p.drawLine(QPointF(mid, s - m), QPointF(s - m - s * 0.05, s * 0.55))
+    return _paint_icon(sz, draw, pen_width=1.5)
+
+
+def _icon_sort_asc(sz=12):
+    """Up arrow — oldest first."""
+    def draw(p, s):
+        m = s * 0.25
+        mid = s * 0.5
+        # Arrow shaft
+        p.drawLine(QPointF(mid, m), QPointF(mid, s - m))
+        # Arrow head
+        p.drawLine(QPointF(mid, m), QPointF(m + s * 0.05, s * 0.45))
+        p.drawLine(QPointF(mid, m), QPointF(s - m - s * 0.05, s * 0.45))
+    return _paint_icon(sz, draw, pen_width=1.5)
+
+
 # ── Draggable title bar ─────────────────────────────────────────
 
 class _TitleBar(QWidget):
@@ -194,6 +220,7 @@ class MainWindow(QWidget):
     transcript_renamed = Signal(str, str, str)
     transcript_deleted = Signal(str, str)
     transcript_moved = Signal(str, str, str)
+    sort_order_changed = Signal(bool)  # True = descending (newest first)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -208,6 +235,7 @@ class MainWindow(QWidget):
         self._maximized = False
         self._normal_geometry = None
         self._centered = False
+        self._sort_descending = True
 
         self._setup_ui()
         self._setup_timer()
@@ -370,6 +398,17 @@ class MainWindow(QWidget):
         tl.setFont(QFont("Calibri", 9, QFont.Weight.Bold))
         th.addWidget(tl)
         th.addStretch()
+
+        self._ico_sort_desc = _icon_sort_desc()
+        self._ico_sort_asc = _icon_sort_asc()
+        self.sort_btn = QPushButton()
+        self.sort_btn.setIcon(self._ico_sort_desc)
+        self.sort_btn.setIconSize(QSize(10, 10))
+        self.sort_btn.setFixedSize(20, 18)
+        self.sort_btn.setToolTip("Sort: Newest first")
+        self.sort_btn.setStyleSheet(flat_css)
+        self.sort_btn.clicked.connect(self._on_sort_toggle)
+        th.addWidget(self.sort_btn)
         ml.addLayout(th)
 
         self.transcript_list = QListWidget()
@@ -654,6 +693,16 @@ class MainWindow(QWidget):
                 self.folder_deleted.emit(folder_name)
 
     # ── Transcript list panel ────────────────────────────────────
+
+    def _on_sort_toggle(self):
+        self._sort_descending = not self._sort_descending
+        if self._sort_descending:
+            self.sort_btn.setIcon(self._ico_sort_desc)
+            self.sort_btn.setToolTip("Sort: Newest first")
+        else:
+            self.sort_btn.setIcon(self._ico_sort_asc)
+            self.sort_btn.setToolTip("Sort: Oldest first")
+        self.sort_order_changed.emit(self._sort_descending)
 
     def set_transcripts(self, transcripts):
         self.transcript_list.clear()

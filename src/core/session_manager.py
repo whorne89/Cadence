@@ -189,17 +189,44 @@ class SessionManager:
 
         return result
 
-    def list_transcripts(self, folder):
-        """List all transcripts in a folder. Returns list of dicts with name and path."""
+    def _parse_transcript_date(self, filepath):
+        """Extract the Date header from a transcript file. Returns datetime or None."""
+        try:
+            with open(filepath, "r", encoding="utf-8") as f:
+                for line in f:
+                    if line.startswith("Date:"):
+                        date_str = line[5:].strip()
+                        return datetime.strptime(date_str, "%Y-%m-%d %H:%M")
+                    if line.strip() == "---":
+                        break
+        except (OSError, ValueError):
+            pass
+        return None
+
+    def list_transcripts(self, folder, sort_descending=True):
+        """List all transcripts in a folder, sorted by date in file content.
+
+        Args:
+            folder: Folder name
+            sort_descending: True for newest first (default), False for oldest first
+        """
         folder_path = self.sessions_dir / folder
         if not folder_path.exists():
             return []
         transcripts = []
-        for f in sorted(folder_path.glob("*.txt")):
+        for f in folder_path.glob("*.txt"):
+            date = self._parse_transcript_date(f)
             transcripts.append({
                 "name": f.stem,
                 "path": str(f),
+                "date": date,
             })
+        # Sort by date (files without dates go to the end)
+        epoch = datetime.min
+        transcripts.sort(
+            key=lambda t: t["date"] or epoch,
+            reverse=sort_descending,
+        )
         return transcripts
 
     def rename_transcript(self, folder, old_name, new_name):
