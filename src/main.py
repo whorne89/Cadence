@@ -393,6 +393,11 @@ class CadenceApp(QObject):
         """Replace live transcript with post-processed segments and save."""
         self.logger.info(f"Post-processing complete: {len(segments)} segments")
 
+        # If post-processing failed (empty result but we had live segments), keep live
+        if not segments and self._current_segments:
+            self.logger.warning("Post-processing returned empty; keeping live transcript")
+            segments = self._current_segments
+
         # Replace live segments with cleaned version
         self._current_segments = segments
 
