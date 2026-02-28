@@ -4,7 +4,6 @@ Main entry point that orchestrates all components.
 """
 
 import sys
-import os
 import ctypes
 import logging
 import time
@@ -31,7 +30,6 @@ from gui.main_window import MainWindow
 from gui.settings_dialog import SettingsDialog
 from utils.config import ConfigManager
 from utils.logger import setup_logger
-from utils.resource_path import get_app_data_path
 
 
 logger = logging.getLogger("Cadence")
@@ -113,50 +111,6 @@ class TranscriptionWorker(QObject):
         self._running = False
 
 
-class ReprocessWorker(QObject):
-    """Worker for batch reprocessing transcription in a background QThread."""
-
-    finished = Signal(list)  # Emits list of transcript segments
-    error = Signal(str)      # Emits error message
-
-    def __init__(self, transcriber, mic_audio, system_audio):
-        super().__init__()
-        self.transcriber = transcriber
-        self.mic_audio = mic_audio
-        self.system_audio = system_audio
-
-    def run(self):
-        """Transcribe both channels, label speakers, and sort by time."""
-        try:
-            segments = []
-
-            # Transcribe microphone audio (speaker = "you")
-            if len(self.mic_audio) > 0:
-                logger.info(f"Reprocessing mic audio: {len(self.mic_audio)} samples")
-                mic_segments = self.transcriber.transcribe(self.mic_audio)
-                for seg in mic_segments:
-                    seg["speaker"] = "you"
-                    segments.append(seg)
-
-            # Transcribe system audio (speaker = "them")
-            if len(self.system_audio) > 0:
-                logger.info(f"Reprocessing system audio: {len(self.system_audio)} samples")
-                system_segments = self.transcriber.transcribe(self.system_audio)
-                for seg in system_segments:
-                    seg["speaker"] = "them"
-                    segments.append(seg)
-
-            # Sort all segments by start time
-            segments.sort(key=lambda s: s["start"])
-
-            logger.info(f"Reprocessing complete: {len(segments)} segments")
-            self.finished.emit(segments)
-
-        except Exception as e:
-            logger.error(f"Reprocessing failed: {e}")
-            self.error.emit(str(e))
-
-
 class CadenceApp(QObject):
     """Main application controller that wires all components together."""
 
@@ -188,10 +142,6 @@ class CadenceApp(QObject):
         streaming_model_size = self.config.get_streaming_model_size()
         self.streaming_transcriber = Transcriber(model_size=streaming_model_size)
 
-        # Reprocess transcriber (higher quality model for batch reprocessing)
-        reprocess_model_size = self.config.get_reprocess_model_size()
-        self.reprocess_transcriber = Transcriber(model_size=reprocess_model_size)
-
         # GUI components (set after creation in main())
         self.tray_icon = None
         self.main_window = None
@@ -200,13 +150,8 @@ class CadenceApp(QObject):
         self._transcription_thread = None
         self._transcription_worker = None
 
-        # Reprocessing thread state
-        self._reprocess_thread = None
-        self._reprocess_worker = None
-
-        # Saved audio for reprocessing
-        self._mic_audio = None
-        self._system_audio = None
+        # Current recording segments
+        self._current_segments = []
 
         self.logger.info("Application initialized")
 
@@ -215,7 +160,8 @@ class CadenceApp(QObject):
         Handle a transcript segment from the transcription worker.
         Called on the main thread via Qt signal (thread-safe).
         """
-        self.session_manager.add_segment(speaker, text, start=timestamp)
+        segment = {"speaker": speaker, "text": text, "start": timestamp}
+        self._current_segments.append(segment)
         if self.main_window is not None:
             self.main_window.append_segment(speaker, text, timestamp)
 
@@ -223,9 +169,8 @@ class CadenceApp(QObject):
         """Start a new recording session."""
         self.logger.info("Starting recording...")
 
-        # Create a new session
-        self.session_manager.create_session()
-        self.session_manager.set_model(self.config.get_streaming_model_size())
+        # Reset segments for new recording
+        self._current_segments = []
 
         # Start audio capture
         self.audio_recorder.start_recording()
@@ -249,7 +194,7 @@ class CadenceApp(QObject):
         self._transcription_worker = TranscriptionWorker(
             self.streaming_transcriber,
             self.audio_recorder,
-            interval=5.0,
+            interval=self.config.get_transcription_interval(),
         )
         self._transcription_worker.moveToThread(self._transcription_thread)
 
@@ -282,38 +227,20 @@ class CadenceApp(QObject):
             self._transcription_worker = None
 
     def stop_recording(self):
-        """Stop recording, finalize transcription, and save the session."""
+        """Stop recording, finalize transcription, and save the transcript."""
         self.logger.info("Stopping recording...")
 
         # Stop transcription worker first
         self._stop_transcription_worker()
 
-        # Stop audio capture and get raw audio
-        mic_audio, system_audio = self.audio_recorder.stop_recording()
+        # Stop audio capture
+        self.audio_recorder.stop_recording()
         duration = self.audio_recorder.get_duration()
 
-        # Save raw audio for potential reprocessing
-        self._mic_audio = mic_audio
-        self._system_audio = system_audio
-
-        # Update session duration
-        self.session_manager.set_duration(duration)
-
-        # Save audio files if configured
-        if self.config.get("session", "save_audio", default=True):
-            audio_dir = get_app_data_path("audio")
-            session_id = self.session_manager.active_session["id"][:8]
-            if len(mic_audio) > 0:
-                mic_path = os.path.join(audio_dir, f"{session_id}_mic.wav")
-                self.audio_recorder.save_audio(mic_audio, mic_path)
-                self.logger.info(f"Mic audio saved: {mic_path}")
-            if len(system_audio) > 0:
-                system_path = os.path.join(audio_dir, f"{session_id}_system.wav")
-                self.audio_recorder.save_audio(system_audio, system_path)
-                self.logger.info(f"System audio saved: {system_path}")
-
-        # Save session transcript
-        self.session_manager.save_session()
+        # Save transcript
+        transcript = self._current_segments
+        model = self.config.get_streaming_model_size()
+        self.session_manager.save_transcript(transcript, duration=duration, model=model)
 
         # Update UI
         if self.main_window is not None:
@@ -327,115 +254,11 @@ class CadenceApp(QObject):
 
         self.logger.info(f"Recording stopped. Duration: {duration:.1f}s")
 
-    def reprocess(self):
-        """Run batch reprocessing of the last recording in a background thread."""
-        if self._mic_audio is None and self._system_audio is None:
-            self.logger.warning("No audio data available for reprocessing")
-            if self.tray_icon is not None:
-                self.tray_icon.show_error("No recording to reprocess")
-            return
-
-        if self._reprocess_thread is not None and self._reprocess_thread.isRunning():
-            self.logger.warning("Reprocessing already in progress")
-            return
-
-        self.logger.info("Starting reprocessing...")
-
-        # Update UI to processing state
-        if self.main_window is not None:
-            self.main_window.set_processing_state()
-        if self.tray_icon is not None:
-            self.tray_icon.set_processing_state()
-
-        # Clean up previous thread if needed
-        if self._reprocess_thread is not None:
-            self._reprocess_thread.quit()
-            self._reprocess_thread.wait()
-            self._reprocess_thread.deleteLater()
-            self._reprocess_thread = None
-        if self._reprocess_worker is not None:
-            self._reprocess_worker.deleteLater()
-            self._reprocess_worker = None
-
-        # Ensure we have valid arrays
-        mic = self._mic_audio if self._mic_audio is not None else np.array([], dtype=np.float32)
-        sys_audio = self._system_audio if self._system_audio is not None else np.array([], dtype=np.float32)
-
-        # Create worker and thread
-        self._reprocess_thread = QThread()
-        self._reprocess_worker = ReprocessWorker(
-            self.reprocess_transcriber, mic, sys_audio
-        )
-        self._reprocess_worker.moveToThread(self._reprocess_thread)
-
-        # Connect signals
-        self._reprocess_thread.started.connect(self._reprocess_worker.run)
-        self._reprocess_worker.finished.connect(self._on_reprocess_finished)
-        self._reprocess_worker.error.connect(self._on_reprocess_error)
-
-        # Cleanup connections (queued to run on main thread)
-        self._reprocess_worker.finished.connect(
-            self._cleanup_reprocess_thread, Qt.ConnectionType.QueuedConnection
-        )
-        self._reprocess_worker.error.connect(
-            self._cleanup_reprocess_thread, Qt.ConnectionType.QueuedConnection
-        )
-
-        # Start
-        self._reprocess_thread.start()
-
-    def _on_reprocess_finished(self, segments):
-        """Handle completed reprocessing."""
-        self.logger.info(f"Reprocessing finished: {len(segments)} segments")
-
-        # Update session with reprocessed transcript
-        if self.session_manager.active_session is not None:
-            self.session_manager.active_session["transcript"] = segments
-            self.session_manager.mark_reprocessed(self.config.get_reprocess_model_size())
-            self.session_manager.save_session()
-
-        # Update main window with new transcript
-        if self.main_window is not None:
-            self.main_window.set_transcript(segments)
-            self.main_window.set_done_state()
-
-        if self.tray_icon is not None:
-            self.tray_icon.set_idle_state()
-            self.tray_icon.show_notification(
-                "Reprocessing Complete",
-                f"{len(segments)} segments transcribed"
-            )
-
-    def _on_reprocess_error(self, error_msg):
-        """Handle reprocessing failure."""
-        self.logger.error(f"Reprocessing error: {error_msg}")
-
-        if self.main_window is not None:
-            self.main_window.set_done_state()
-        if self.tray_icon is not None:
-            self.tray_icon.set_idle_state()
-            self.tray_icon.show_error(f"Reprocessing failed: {error_msg}")
-
-    def _cleanup_reprocess_thread(self, _result=None):
-        """Clean up reprocessing thread resources."""
-        if self._reprocess_thread is not None:
-            self._reprocess_thread.quit()
-            self._reprocess_thread.wait(2000)
-            self._reprocess_thread.deleteLater()
-            self._reprocess_thread = None
-        if self._reprocess_worker is not None:
-            self._reprocess_worker.deleteLater()
-            self._reprocess_worker = None
-
     def show_settings(self):
         """Open the settings dialog."""
         self.logger.info("Opening settings dialog")
         try:
-            dialog = SettingsDialog(
-                self.config,
-                self.audio_recorder,
-                self.reprocess_transcriber,
-            )
+            dialog = SettingsDialog(self.config, self.audio_recorder)
             dialog.settings_changed.connect(self._on_settings_changed)
             dialog.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.WindowStaysOnTopHint)
             dialog.exec()
@@ -459,10 +282,59 @@ class CadenceApp(QObject):
         if streaming_model != self.streaming_transcriber.model_size:
             self.streaming_transcriber.change_model(streaming_model)
 
-        # Update reprocess model
-        reprocess_model = self.config.get_reprocess_model_size()
-        if reprocess_model != self.reprocess_transcriber.model_size:
-            self.reprocess_transcriber.change_model(reprocess_model)
+        # Note: transcription interval is read fresh each time recording starts
+
+    def on_folder_selected(self, folder_name):
+        """Load and display transcripts for the selected folder."""
+        transcripts = self.session_manager.list_transcripts(folder_name)
+        if self.main_window:
+            self.main_window.set_transcripts(transcripts)
+
+    def on_folder_created(self, name):
+        """Create a new folder and refresh the folder list."""
+        self.session_manager.create_folder(name)
+        self._refresh_folders()
+
+    def on_folder_renamed(self, old_name, new_name):
+        """Rename a folder and refresh the folder list."""
+        self.session_manager.rename_folder(old_name, new_name)
+        self._refresh_folders()
+
+    def on_folder_deleted(self, name):
+        """Delete a folder and refresh the folder list."""
+        self.session_manager.delete_folder(name)
+        self._refresh_folders()
+
+    def on_transcript_selected(self, folder, name):
+        """Load and display the selected transcript."""
+        transcripts = self.session_manager.list_transcripts(folder)
+        for t in transcripts:
+            if t["name"] == name:
+                data = self.session_manager.load_transcript(t["path"])
+                if self.main_window:
+                    self.main_window.set_transcript(data["segments"])
+                break
+
+    def on_transcript_renamed(self, folder, old_name, new_name):
+        """Rename a transcript and refresh the transcript list."""
+        self.session_manager.rename_transcript(folder, old_name, new_name)
+        self.on_folder_selected(folder)
+
+    def on_transcript_deleted(self, folder, name):
+        """Delete a transcript and refresh the transcript list."""
+        self.session_manager.delete_transcript(folder, name)
+        self.on_folder_selected(folder)
+
+    def on_transcript_moved(self, src_folder, name, dest_folder):
+        """Move a transcript to another folder and refresh the transcript list."""
+        self.session_manager.move_transcript(src_folder, name, dest_folder)
+        self.on_folder_selected(src_folder)
+
+    def _refresh_folders(self):
+        """Refresh the folder list in the main window."""
+        folders = self.session_manager.list_folders()
+        if self.main_window:
+            self.main_window.set_folders(folders)
 
     def show_window(self):
         """Show and raise the main window."""
@@ -481,11 +353,6 @@ class CadenceApp(QObject):
         # Stop recording if active
         if self.audio_recorder.is_recording:
             self.audio_recorder.stop_recording()
-
-        # Clean up reprocessing thread
-        if self._reprocess_thread is not None and self._reprocess_thread.isRunning():
-            self._reprocess_thread.quit()
-            self._reprocess_thread.wait(2000)
 
         QApplication.quit()
 
@@ -521,7 +388,17 @@ def main():
     # Wire main window signals
     main_window.start_requested.connect(cadence_app.start_recording)
     main_window.stop_requested.connect(cadence_app.stop_recording)
-    main_window.reprocess_requested.connect(cadence_app.reprocess)
+    main_window.folder_selected.connect(cadence_app.on_folder_selected)
+    main_window.folder_created.connect(cadence_app.on_folder_created)
+    main_window.folder_renamed.connect(cadence_app.on_folder_renamed)
+    main_window.folder_deleted.connect(cadence_app.on_folder_deleted)
+    main_window.transcript_selected.connect(cadence_app.on_transcript_selected)
+    main_window.transcript_renamed.connect(cadence_app.on_transcript_renamed)
+    main_window.transcript_deleted.connect(cadence_app.on_transcript_deleted)
+    main_window.transcript_moved.connect(cadence_app.on_transcript_moved)
+
+    # Load folders on startup
+    cadence_app._refresh_folders()
 
     # Show the main window
     main_window.show()
