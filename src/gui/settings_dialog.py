@@ -3,13 +3,15 @@ Settings dialog for Cadence.
 """
 
 from PySide6.QtWidgets import (
-    QDialog, QVBoxLayout, QFormLayout, QHBoxLayout,
-    QComboBox, QGroupBox, QDialogButtonBox, QSpinBox, QLabel,
+    QVBoxLayout, QFormLayout, QHBoxLayout,
+    QComboBox, QGroupBox, QPushButton, QSpinBox,
 )
 from PySide6.QtCore import Signal
 
+from gui.theme import RoundedDialog
 
-class SettingsDialog(QDialog):
+
+class SettingsDialog(RoundedDialog):
     """Settings dialog for model, audio device, and preferences."""
 
     settings_changed = Signal()
@@ -24,7 +26,7 @@ class SettingsDialog(QDialog):
         self._load_current_settings()
 
     def _setup_ui(self):
-        layout = QVBoxLayout(self)
+        layout = QVBoxLayout()
 
         # Model settings
         model_group = QGroupBox("Transcription")
@@ -58,12 +60,19 @@ class SettingsDialog(QDialog):
         layout.addWidget(audio_group)
 
         # Buttons
-        buttons = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
-        )
-        buttons.accepted.connect(self._save_settings)
-        buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
+        btn_layout = QHBoxLayout()
+        btn_layout.addStretch()
+        ok_btn = QPushButton("Save")
+        ok_btn.setFixedWidth(80)
+        ok_btn.clicked.connect(self._save_settings)
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.setFixedWidth(80)
+        cancel_btn.clicked.connect(self.reject)
+        btn_layout.addWidget(ok_btn)
+        btn_layout.addWidget(cancel_btn)
+        layout.addLayout(btn_layout)
+
+        self.setLayout(layout)
 
     def _populate_mic_devices(self):
         self.mic_combo.addItem("Default", None)

@@ -1,24 +1,191 @@
 """
 Main window for Cadence.
-3-panel layout: folder tree | transcript list | transcript viewer.
+Frameless rounded window with custom title bar and 3-panel layout.
 """
 
 import time
+from math import cos, sin, pi
+
 from PySide6.QtWidgets import (
-    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QPushButton, QTextEdit, QLabel, QFrame, QSplitter,
+    QWidget, QVBoxLayout, QHBoxLayout, QSizeGrip,
+    QPushButton, QTextEdit, QLabel, QSplitter,
     QTreeWidget, QTreeWidgetItem, QListWidget, QListWidgetItem,
-    QInputDialog, QMenu, QMessageBox,
+    QInputDialog, QMenu,
 )
-from PySide6.QtCore import Signal, QTimer, Qt
-from PySide6.QtGui import QFont, QTextCursor, QAction
+from PySide6.QtCore import Signal, QTimer, Qt, QPointF, QRectF, QSize
+from PySide6.QtGui import (
+    QFont, QTextCursor, QAction, QPainter, QPen, QBrush,
+    QColor, QPainterPath, QRegion, QGuiApplication, QPixmap, QIcon,
+)
+
+from version import __version__
+from gui.theme import (
+    BG_PRIMARY, BG_SURFACE, BORDER, ACCENT,
+    TEXT_PRIMARY, TEXT_SECONDARY, MessageBox,
+)
+
+TITLE_BAR_HEIGHT = 32
+CORNER_RADIUS = 8
 
 
-class MainWindow(QMainWindow):
-    """Main transcript window with 3-panel layout."""
+# ── Painted icons ────────────────────────────────────────────────
+
+def _paint_icon(size, draw_fn, color=TEXT_PRIMARY, pen_width=1.3):
+    """Create a QIcon by painting with QPainter."""
+    pix = QPixmap(size, size)
+    pix.fill(Qt.GlobalColor.transparent)
+    p = QPainter(pix)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    pen = QPen(QColor(color))
+    pen.setWidthF(pen_width)
+    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+    pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+    p.setPen(pen)
+    draw_fn(p, float(size))
+    p.end()
+    return QIcon(pix)
+
+
+def _icon_close(sz=12):
+    def draw(p, s):
+        m = s * 0.28
+        p.drawLine(QPointF(m, m), QPointF(s - m, s - m))
+        p.drawLine(QPointF(s - m, m), QPointF(m, s - m))
+    return _paint_icon(sz, draw)
+
+
+def _icon_minimize(sz=12):
+    def draw(p, s):
+        m = s * 0.25
+        y = s * 0.5
+        p.drawLine(QPointF(m, y), QPointF(s - m, y))
+    return _paint_icon(sz, draw)
+
+
+def _icon_maximize(sz=12):
+    def draw(p, s):
+        m = s * 0.24
+        p.drawRect(QRectF(m, m, s - 2 * m, s - 2 * m))
+    return _paint_icon(sz, draw)
+
+
+def _icon_restore(sz=12):
+    def draw(p, s):
+        m = s * 0.18
+        d = s * 0.22
+        w = s * 0.44
+        # back rectangle (partial, upper-right)
+        p.drawPolyline([
+            QPointF(m + d, m + w),
+            QPointF(m + d, m),
+            QPointF(m + d + w, m),
+            QPointF(m + d + w, m + w),
+            QPointF(m + w, m + w),
+        ])
+        # front rectangle (complete, lower-left)
+        p.drawRect(QRectF(m, m + d, w, w))
+    return _paint_icon(sz, draw)
+
+
+def _icon_hamburger(sz=12):
+    def draw(p, s):
+        m = s * 0.2
+        for frac in (0.26, 0.50, 0.74):
+            y = s * frac
+            p.drawLine(QPointF(m, y), QPointF(s - m, y))
+    return _paint_icon(sz, draw)
+
+
+def _icon_chevron_right(sz=12):
+    def draw(p, s):
+        mx = s * 0.38
+        my = s * 0.22
+        mid = s * 0.5
+        p.drawLine(QPointF(mx, my), QPointF(s - mx, mid))
+        p.drawLine(QPointF(s - mx, mid), QPointF(mx, s - my))
+    return _paint_icon(sz, draw)
+
+
+def _icon_gear(sz=14):
+    def draw(p, s):
+        c = s / 2.0
+        outer = s * 0.44
+        inner = s * 0.30
+        teeth = 8
+        step = pi / teeth
+        path = QPainterPath()
+        for i in range(teeth * 2):
+            angle = i * step - pi / 2
+            r = outer if i % 2 == 0 else inner
+            x = c + r * cos(angle)
+            y = c + r * sin(angle)
+            if i == 0:
+                path.moveTo(x, y)
+            else:
+                path.lineTo(x, y)
+        path.closeSubpath()
+        p.drawPath(path)
+        # center hole
+        p.drawEllipse(QPointF(c, c), s * 0.10, s * 0.10)
+    return _paint_icon(sz, draw)
+
+
+def _icon_plus(sz=10):
+    def draw(p, s):
+        m = s * 0.2
+        mid = s / 2.0
+        p.drawLine(QPointF(mid, m), QPointF(mid, s - m))
+        p.drawLine(QPointF(m, mid), QPointF(s - m, mid))
+    return _paint_icon(sz, draw, pen_width=1.5)
+
+
+# ── Draggable title bar ─────────────────────────────────────────
+
+class _TitleBar(QWidget):
+    """Draggable title bar that moves its parent window."""
+
+    def __init__(self, window):
+        super().__init__(window)
+        self._window = window
+        self._drag_pos = None
+        self.setFixedHeight(TITLE_BAR_HEIGHT)
+        self.setObjectName("titleBar")
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._drag_pos = event.globalPosition().toPoint() - self._window.pos()
+
+    def mouseMoveEvent(self, event):
+        if self._drag_pos and event.buttons() & Qt.MouseButton.LeftButton:
+            if self._window._maximized:
+                old_w = self._window.width()
+                self._window._toggle_maximize()
+                mouse = event.globalPosition().toPoint()
+                new_w = self._window.width()
+                ratio = min(event.position().x() / old_w, 1.0) if old_w else 0.5
+                self._window.move(
+                    int(mouse.x() - new_w * ratio),
+                    mouse.y() - self.height() // 2,
+                )
+                self._drag_pos = mouse - self._window.pos()
+            else:
+                self._window.move(event.globalPosition().toPoint() - self._drag_pos)
+
+    def mouseReleaseEvent(self, event):
+        self._drag_pos = None
+
+    def mouseDoubleClickEvent(self, event):
+        self._window._toggle_maximize()
+
+
+# ── Main window ──────────────────────────────────────────────────
+
+class MainWindow(QWidget):
+    """Main transcript window with 3-panel layout and custom title bar."""
 
     start_requested = Signal()
     stop_requested = Signal()
+    settings_requested = Signal()
     folder_selected = Signal(str)
     transcript_selected = Signal(str, str)
     folder_created = Signal(str)
@@ -32,33 +199,99 @@ class MainWindow(QMainWindow):
         super().__init__(parent)
         self.setWindowTitle("Cadence")
         self.setMinimumSize(800, 500)
+        self.setWindowFlags(Qt.WindowType.FramelessWindowHint)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+
         self._recording = False
         self._start_time = 0
         self._current_folder = None
+        self._maximized = False
+        self._normal_geometry = None
+        self._centered = False
+
         self._setup_ui()
         self._setup_timer()
 
+    # ── UI setup ─────────────────────────────────────────────────
+
+    def _make_icon_btn(self, icon, size, tooltip, css, slot):
+        """Create a QPushButton with a painted icon."""
+        btn = QPushButton()
+        btn.setIcon(icon)
+        btn.setIconSize(QSize(size[0] - 12, size[1] - 10))
+        btn.setFixedSize(*size)
+        btn.setToolTip(tooltip)
+        btn.setStyleSheet(css)
+        btn.clicked.connect(slot)
+        return btn
+
     def _setup_ui(self):
-        central = QWidget()
-        self.setCentralWidget(central)
-        layout = QVBoxLayout(central)
-        layout.setContentsMargins(2, 0, 2, 2)
-        layout.setSpacing(0)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
 
-        # Top bar: sidebar toggle | [BADGE] 00:00:00 · 0 words
+        # --- Build icons ---
+        self._ico_hamburger = _icon_hamburger()
+        self._ico_chevron = _icon_chevron_right()
+        self._ico_maximize = _icon_maximize()
+        self._ico_restore = _icon_restore()
+
+        # --- Reusable style snippets ---
+        win_btn_css = (
+            f"QPushButton {{ background:transparent; border:none; border-radius:4px; }}"
+            f"QPushButton:hover {{ background-color:{BG_SURFACE}; }}"
+        )
+        close_css = (
+            f"QPushButton {{ background:transparent; border:none; border-radius:4px; }}"
+            f"QPushButton:hover {{ background-color:#e74c3c; }}"
+        )
+        flat_css = (
+            f"QPushButton {{ background:transparent; border:none; }}"
+            f"QPushButton:hover {{ background-color:{BG_SURFACE}; border-radius:3px; }}"
+        )
+
+        # --- Custom title bar ---
+        title_bar = _TitleBar(self)
+        title_bar.setStyleSheet("QWidget#titleBar { background:transparent; }")
+        tb = QHBoxLayout(title_bar)
+        tb.setContentsMargins(12, 0, 4, 0)
+        tb.setSpacing(2)
+
+        title_label = QLabel(f"Cadence v{__version__}")
+        title_label.setFont(QFont("Calibri", 11, QFont.Weight.Bold))
+        tb.addWidget(title_label)
+        tb.addStretch()
+
+        self._min_btn = self._make_icon_btn(
+            _icon_minimize(), (36, 28), "Minimize", win_btn_css, self.showMinimized)
+        tb.addWidget(self._min_btn)
+
+        self._max_btn = self._make_icon_btn(
+            self._ico_maximize, (36, 28), "Maximize", win_btn_css, self._toggle_maximize)
+        tb.addWidget(self._max_btn)
+
+        self._close_btn = self._make_icon_btn(
+            _icon_close(), (36, 28), "Close", close_css, self.close)
+        tb.addWidget(self._close_btn)
+
+        root.addWidget(title_bar)
+
+        # --- Top bar: [hamburger] [BADGE] 00:00:00 · 0 words … [gear] ---
         top_bar = QHBoxLayout()
-        top_bar.setContentsMargins(2, 1, 4, 1)
-        top_bar.setSpacing(6)
+        top_bar.setContentsMargins(6, 0, 6, 2)
+        top_bar.setSpacing(8)
 
-        self.sidebar_btn = QPushButton("\u2630")  # hamburger icon
-        self.sidebar_btn.setFixedSize(24, 20)
+        self.sidebar_btn = QPushButton()
+        self.sidebar_btn.setIcon(self._ico_hamburger)
+        self.sidebar_btn.setIconSize(QSize(12, 12))
+        self.sidebar_btn.setFixedSize(22, 20)
         self.sidebar_btn.setToolTip("Toggle sidebar")
-        self.sidebar_btn.setStyleSheet("border: none; font-size: 12px; color: #888;")
+        self.sidebar_btn.setStyleSheet(flat_css)
         self.sidebar_btn.clicked.connect(self._toggle_sidebar)
         top_bar.addWidget(self.sidebar_btn)
 
         self.status_label = QLabel("READY")
-        self.status_label.setFont(QFont("Segoe UI", 8, QFont.Weight.Bold))
+        self.status_label.setFont(QFont("Calibri", 8, QFont.Weight.Bold))
         self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.status_label.setFixedHeight(18)
         self._set_status_badge("idle")
@@ -69,138 +302,222 @@ class MainWindow(QMainWindow):
         top_bar.addWidget(self.timer_label)
 
         sep = QLabel("\u00b7")
-        sep.setStyleSheet("color: #888;")
+        sep.setStyleSheet(f"color:{TEXT_SECONDARY};")
         top_bar.addWidget(sep)
 
         self.info_label = QLabel("0 words")
-        self.info_label.setFont(QFont("Segoe UI", 8))
-        self.info_label.setStyleSheet("color: #888;")
+        self.info_label.setFont(QFont("Calibri", 8))
+        self.info_label.setStyleSheet(f"color:{TEXT_SECONDARY};")
         top_bar.addWidget(self.info_label)
 
         top_bar.addStretch()
-        layout.addLayout(top_bar)
 
-        # 3-panel splitter
+        self.settings_btn = QPushButton()
+        self.settings_btn.setIcon(_icon_gear())
+        self.settings_btn.setIconSize(QSize(14, 14))
+        self.settings_btn.setFixedSize(24, 22)
+        self.settings_btn.setToolTip("Settings")
+        self.settings_btn.setStyleSheet(flat_css)
+        self.settings_btn.clicked.connect(self.settings_requested.emit)
+        top_bar.addWidget(self.settings_btn)
+
+        root.addLayout(top_bar)
+
+        # --- 3-panel splitter ---
         self.splitter = QSplitter(Qt.Orientation.Horizontal)
         self._sidebar_visible = True
 
-        # Left panel - Folder tree
+        # Left panel – Folder tree
         self.left_panel = QWidget()
-        left_layout = QVBoxLayout(self.left_panel)
-        left_layout.setContentsMargins(0, 0, 0, 0)
-        left_layout.setSpacing(0)
-        folder_header = QHBoxLayout()
-        folder_header.setContentsMargins(2, 0, 2, 0)
-        folder_label = QLabel("Folders")
-        folder_label.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
-        folder_header.addWidget(folder_label)
-        folder_header.addStretch()
-        self.add_folder_btn = QPushButton("+")
+        ll = QVBoxLayout(self.left_panel)
+        ll.setContentsMargins(0, 0, 0, 0)
+        ll.setSpacing(0)
+        fh = QHBoxLayout()
+        fh.setContentsMargins(4, 2, 4, 2)
+        fl = QLabel("Folders")
+        fl.setFont(QFont("Calibri", 9, QFont.Weight.Bold))
+        fh.addWidget(fl)
+        fh.addStretch()
+
+        self.add_folder_btn = QPushButton()
+        self.add_folder_btn.setIcon(_icon_plus())
+        self.add_folder_btn.setIconSize(QSize(10, 10))
         self.add_folder_btn.setFixedSize(20, 18)
         self.add_folder_btn.setToolTip("New Folder")
-        self.add_folder_btn.setStyleSheet("border: none; font-size: 14px; font-weight: bold;")
+        self.add_folder_btn.setStyleSheet(flat_css)
         self.add_folder_btn.clicked.connect(self._on_add_folder)
-        folder_header.addWidget(self.add_folder_btn)
-        left_layout.addLayout(folder_header)
+        fh.addWidget(self.add_folder_btn)
+        ll.addLayout(fh)
+
         self.folder_tree = QTreeWidget()
         self.folder_tree.setHeaderHidden(True)
-        self.folder_tree.setFont(QFont("Segoe UI", 9))
+        self.folder_tree.setFont(QFont("Calibri", 9))
         self.folder_tree.setIndentation(12)
         self.folder_tree.itemClicked.connect(self._on_folder_clicked)
         self.folder_tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.folder_tree.customContextMenuRequested.connect(self._on_folder_context_menu)
-        left_layout.addWidget(self.folder_tree)
+        ll.addWidget(self.folder_tree)
         self.splitter.addWidget(self.left_panel)
 
-        # Middle panel - Transcript list
+        # Middle panel – Transcript list
         self.mid_panel = QWidget()
-        mid_layout = QVBoxLayout(self.mid_panel)
-        mid_layout.setContentsMargins(0, 0, 0, 0)
-        mid_layout.setSpacing(0)
-        transcript_label = QLabel("Transcripts")
-        transcript_label.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
-        transcript_label.setContentsMargins(2, 0, 2, 0)
-        mid_layout.addWidget(transcript_label)
+        ml = QVBoxLayout(self.mid_panel)
+        ml.setContentsMargins(0, 0, 0, 0)
+        ml.setSpacing(0)
+        th = QHBoxLayout()
+        th.setContentsMargins(4, 2, 4, 2)
+        tl = QLabel("Transcripts")
+        tl.setFont(QFont("Calibri", 9, QFont.Weight.Bold))
+        th.addWidget(tl)
+        th.addStretch()
+        ml.addLayout(th)
+
         self.transcript_list = QListWidget()
-        self.transcript_list.setFont(QFont("Segoe UI", 9))
+        self.transcript_list.setFont(QFont("Calibri", 9))
         self.transcript_list.itemClicked.connect(self._on_transcript_clicked)
         self.transcript_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.transcript_list.customContextMenuRequested.connect(self._on_transcript_context_menu)
-        mid_layout.addWidget(self.transcript_list)
+        ml.addWidget(self.transcript_list)
         self.splitter.addWidget(self.mid_panel)
 
-        # Right panel - Transcript viewer
-        right_panel = QWidget()
-        right_layout = QVBoxLayout(right_panel)
-        right_layout.setContentsMargins(0, 0, 0, 0)
+        # Right panel – Transcript viewer
+        rp = QWidget()
+        rl = QVBoxLayout(rp)
+        rl.setContentsMargins(0, 0, 0, 0)
         self.transcript_area = QTextEdit()
         self.transcript_area.setReadOnly(True)
-        self.transcript_area.setFont(QFont("Segoe UI", 11))
-        right_layout.addWidget(self.transcript_area)
-        self.splitter.addWidget(right_panel)
+        self.transcript_area.setFont(QFont("Calibri", 11))
+        rl.addWidget(self.transcript_area)
+        self.splitter.addWidget(rp)
 
         self.splitter.setCollapsible(0, False)
         self.splitter.setCollapsible(1, False)
         self.splitter.setCollapsible(2, False)
         self.splitter.setSizes([130, 130, 540])
         self.splitter.setHandleWidth(2)
-        layout.addWidget(self.splitter)
+        root.addWidget(self.splitter)
 
-        # Bottom controls
+        # --- Bottom controls ---
         controls = QHBoxLayout()
-        controls.setContentsMargins(0, 2, 0, 0)
+        controls.setContentsMargins(4, 2, 4, 4)
         self.record_btn = QPushButton("Start Recording")
         self.record_btn.setMinimumHeight(32)
-        self.record_btn.setFont(QFont("Segoe UI", 10))
+        self.record_btn.setFont(QFont("Calibri", 10))
         self.record_btn.clicked.connect(self._on_record_clicked)
         controls.addWidget(self.record_btn)
-
         controls.addStretch()
 
         self.clear_btn = QPushButton("Clear")
         self.clear_btn.setMinimumHeight(32)
-        self.clear_btn.setFont(QFont("Segoe UI", 10))
+        self.clear_btn.setFont(QFont("Calibri", 10))
         self.clear_btn.clicked.connect(self._on_clear)
         controls.addWidget(self.clear_btn)
 
         self.copy_btn = QPushButton("Copy")
         self.copy_btn.setMinimumHeight(32)
-        self.copy_btn.setFont(QFont("Segoe UI", 10))
+        self.copy_btn.setFont(QFont("Calibri", 10))
         self.copy_btn.clicked.connect(self._on_copy)
         controls.addWidget(self.copy_btn)
 
-        layout.addLayout(controls)
+        root.addLayout(controls)
+
+        # Resize grip (bottom-right corner)
+        self._grip = QSizeGrip(self)
+        self._grip.setFixedSize(14, 14)
+        self._grip.setStyleSheet("background:transparent;")
 
     def _setup_timer(self):
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._update_timer)
 
-    # --- Sidebar toggle ---
+    # ── Frameless window drawing ─────────────────────────────────
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        r = CORNER_RADIUS if not self._maximized else 0
+        path = QPainterPath()
+        rect = self.rect().adjusted(0, 0, -1, -1)
+        if r > 0:
+            path.addRoundedRect(rect, r, r)
+        else:
+            path.addRect(rect)
+        p.setPen(QPen(QColor(BORDER), 1))
+        p.setBrush(QBrush(QColor(BG_PRIMARY)))
+        p.drawPath(path)
+        # title bar divider
+        p.drawLine(1, TITLE_BAR_HEIGHT, self.width() - 2, TITLE_BAR_HEIGHT)
+        p.end()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if not self._maximized:
+            path = QPainterPath()
+            path.addRoundedRect(
+                0, 0, self.width(), self.height(),
+                CORNER_RADIUS, CORNER_RADIUS,
+            )
+            self.setMask(QRegion(path.toFillPolygon().toPolygon()))
+        else:
+            self.clearMask()
+        self._grip.move(self.width() - 14, self.height() - 14)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if not self._centered:
+            screen = self.screen() or QGuiApplication.primaryScreen()
+            if screen:
+                geo = screen.availableGeometry()
+                self.move(
+                    geo.center().x() - self.width() // 2,
+                    geo.center().y() - self.height() // 2,
+                )
+            self._centered = True
+
+    def _toggle_maximize(self):
+        if self._maximized:
+            self._maximized = False
+            if self._normal_geometry:
+                self.setGeometry(self._normal_geometry)
+            self._max_btn.setIcon(self._ico_maximize)
+        else:
+            self._normal_geometry = self.geometry()
+            self._maximized = True
+            screen = self.screen() or QGuiApplication.primaryScreen()
+            if screen:
+                self.setGeometry(screen.availableGeometry())
+            self._max_btn.setIcon(self._ico_restore)
+
+    # ── Sidebar toggle ───────────────────────────────────────────
 
     def _toggle_sidebar(self):
         self._sidebar_visible = not self._sidebar_visible
         self.left_panel.setVisible(self._sidebar_visible)
         self.mid_panel.setVisible(self._sidebar_visible)
-        self.sidebar_btn.setText("\u2630" if self._sidebar_visible else "\u25b6")
+        self.sidebar_btn.setIcon(
+            self._ico_hamburger if self._sidebar_visible else self._ico_chevron
+        )
 
-    # --- Status badge ---
+    # ── Status badge ─────────────────────────────────────────────
 
     def _set_status_badge(self, state):
-        """Set the status badge style. States: idle, recording, done."""
         styles = {
             "idle": (
-                "background-color: #555; color: #ccc; border-radius: 4px; padding: 2px 12px;"
+                f"background-color:{BG_SURFACE}; color:{TEXT_SECONDARY};"
+                f" border:1px solid {BORDER}; border-radius:4px; padding:2px 12px;"
             ),
             "recording": (
-                "background-color: #dc3232; color: white; border-radius: 4px; padding: 2px 12px;"
+                "background-color:#dc3232; color:white;"
+                " border:1px solid #dc3232; border-radius:4px; padding:2px 12px;"
             ),
             "done": (
-                "background-color: #2ea043; color: white; border-radius: 4px; padding: 2px 12px;"
+                "background-color:#2ea043; color:white;"
+                " border:1px solid #2ea043; border-radius:4px; padding:2px 12px;"
             ),
         }
         self.status_label.setStyleSheet(styles.get(state, styles["idle"]))
 
-    # --- Recording state ---
+    # ── Recording state ──────────────────────────────────────────
 
     def _on_record_clicked(self):
         if self._recording:
@@ -212,7 +529,7 @@ class MainWindow(QMainWindow):
         self._recording = True
         self._start_time = time.time()
         self.record_btn.setText("Stop Recording")
-        self.record_btn.setStyleSheet("background-color: #dc3232; color: white;")
+        self.record_btn.setStyleSheet("background-color:#dc3232; color:white;")
         self.status_label.setText("RECORDING")
         self._set_status_badge("recording")
         self._timer.start(1000)
@@ -234,23 +551,20 @@ class MainWindow(QMainWindow):
         self._set_status_badge("done")
         self._timer.stop()
 
-    # --- Transcript display ---
+    # ── Transcript display ───────────────────────────────────────
 
     def append_segment(self, speaker, text, timestamp=0.0):
-        """Append a transcript segment with speaker label and timestamp."""
         cursor = self.transcript_area.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.End)
         if speaker == "you":
-            label = "You"
-            color = "#4a90d9"
+            label, color = "You", ACCENT
         else:
-            label = "Them"
-            color = "#d94a4a"
+            label, color = "Them", "#e74c3c"
         mins = int(timestamp) // 60
         secs = int(timestamp) % 60
         ts_str = f"{mins:02d}:{secs:02d}"
         cursor.insertHtml(
-            f'<span style="color:#888; font-size:10px">[{ts_str}]</span> '
+            f'<span style="color:{TEXT_SECONDARY}; font-size:10px">[{ts_str}]</span> '
             f'<b style="color:{color}">{label}:</b> {text}<br>'
         )
         self.transcript_area.setTextCursor(cursor)
@@ -258,7 +572,6 @@ class MainWindow(QMainWindow):
         self._update_word_count()
 
     def set_transcript(self, segments):
-        """Replace transcript with full list of segments."""
         self.transcript_area.clear()
         for seg in segments:
             self.append_segment(seg["speaker"], seg["text"], seg.get("start", 0.0))
@@ -268,15 +581,15 @@ class MainWindow(QMainWindow):
         word_count = len(text_content.split()) if text_content.strip() else 0
         self.info_label.setText(f"{word_count} words")
 
-    # --- Clear / Copy ---
+    # ── Clear / Copy ─────────────────────────────────────────────
 
     def _on_clear(self):
         if not self.transcript_area.toPlainText().strip():
             return
-        reply = QMessageBox.question(
+        reply = MessageBox.question(
             self, "Clear Transcript",
             "Are you sure you want to clear the transcript?")
-        if reply == QMessageBox.StandardButton.Yes:
+        if reply == MessageBox.Yes:
             self.transcript_area.clear()
             self._update_word_count()
 
@@ -286,10 +599,9 @@ class MainWindow(QMainWindow):
         if text:
             QApplication.clipboard().setText(text)
 
-    # --- Folder panel ---
+    # ── Folder panel ─────────────────────────────────────────────
 
     def set_folders(self, folders):
-        """Populate the folder tree with a list of folder names."""
         self.folder_tree.clear()
         for name in folders:
             item = QTreeWidgetItem([name])
@@ -318,19 +630,20 @@ class MainWindow(QMainWindow):
 
         action = menu.exec(self.folder_tree.mapToGlobal(pos))
         if action == rename_action:
-            new_name, ok = QInputDialog.getText(self, "Rename Folder", "New name:", text=folder_name)
+            new_name, ok = QInputDialog.getText(
+                self, "Rename Folder", "New name:", text=folder_name)
             if ok and new_name.strip() and new_name.strip() != folder_name:
                 self.folder_renamed.emit(folder_name, new_name.strip())
         elif action == delete_action:
-            reply = QMessageBox.question(self, "Delete Folder",
+            reply = MessageBox.question(
+                self, "Delete Folder",
                 f"Delete folder '{folder_name}' and all its transcripts?")
-            if reply == QMessageBox.StandardButton.Yes:
+            if reply == MessageBox.Yes:
                 self.folder_deleted.emit(folder_name)
 
-    # --- Transcript list panel ---
+    # ── Transcript list panel ────────────────────────────────────
 
     def set_transcripts(self, transcripts):
-        """Populate transcript list. transcripts is a list of dicts with 'name' and 'path'."""
         self.transcript_list.clear()
         for t in transcripts:
             item = QListWidgetItem(t["name"])
@@ -357,13 +670,14 @@ class MainWindow(QMainWindow):
 
         action = menu.exec(self.transcript_list.mapToGlobal(pos))
         if action == rename_action:
-            new_name, ok = QInputDialog.getText(self, "Rename Transcript", "New name:", text=name)
+            new_name, ok = QInputDialog.getText(
+                self, "Rename Transcript", "New name:", text=name)
             if ok and new_name.strip() and new_name.strip() != name:
                 self.transcript_renamed.emit(self._current_folder, name, new_name.strip())
         elif action == delete_action:
-            reply = QMessageBox.question(self, "Delete Transcript",
-                f"Delete transcript '{name}'?")
-            if reply == QMessageBox.StandardButton.Yes:
+            reply = MessageBox.question(
+                self, "Delete Transcript", f"Delete transcript '{name}'?")
+            if reply == MessageBox.Yes:
                 self.transcript_deleted.emit(self._current_folder, name)
         elif action == move_action:
             folders = []
@@ -372,13 +686,14 @@ class MainWindow(QMainWindow):
                 if f != self._current_folder:
                     folders.append(f)
             if not folders:
-                QMessageBox.information(self, "Move", "No other folders available.")
+                MessageBox.information(self, "Move", "No other folders available.")
                 return
-            dest, ok = QInputDialog.getItem(self, "Move to Folder", "Destination:", folders, 0, False)
+            dest, ok = QInputDialog.getItem(
+                self, "Move to Folder", "Destination:", folders, 0, False)
             if ok and dest:
                 self.transcript_moved.emit(self._current_folder, name, dest)
 
-    # --- Timer ---
+    # ── Timer ────────────────────────────────────────────────────
 
     def _update_timer(self):
         elapsed = int(time.time() - self._start_time)

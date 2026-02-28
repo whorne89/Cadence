@@ -28,6 +28,7 @@ from core.session_manager import SessionManager
 from gui.system_tray import SystemTrayIcon
 from gui.main_window import MainWindow
 from gui.settings_dialog import SettingsDialog
+from gui.theme import apply_theme
 from utils.config import ConfigManager
 from utils.logger import setup_logger
 
@@ -267,9 +268,8 @@ class CadenceApp(QObject):
         """Open the settings dialog."""
         self.logger.info("Opening settings dialog")
         try:
-            dialog = SettingsDialog(self.config, self.audio_recorder)
+            dialog = SettingsDialog(self.config, self.audio_recorder, parent=self.main_window)
             dialog.settings_changed.connect(self._on_settings_changed)
-            dialog.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.WindowStaysOnTopHint)
             dialog.exec()
         except Exception as e:
             self.logger.error(f"Failed to show settings dialog: {e}")
@@ -377,6 +377,9 @@ def main():
     app.setApplicationDisplayName("Cadence")
     app.setQuitOnLastWindowClosed(False)  # Keep running with system tray
 
+    # Apply dark theme
+    apply_theme(app)
+
     # Create application controller
     cadence_app = CadenceApp()
 
@@ -406,6 +409,7 @@ def main():
     main_window.transcript_renamed.connect(cadence_app.on_transcript_renamed)
     main_window.transcript_deleted.connect(cadence_app.on_transcript_deleted)
     main_window.transcript_moved.connect(cadence_app.on_transcript_moved)
+    main_window.settings_requested.connect(cadence_app.show_settings)
 
     # Load folders on startup
     cadence_app._refresh_folders()

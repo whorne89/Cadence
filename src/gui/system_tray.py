@@ -2,10 +2,11 @@
 System tray interface for Cadence.
 """
 
-from PySide6.QtWidgets import QSystemTrayIcon, QMenu, QMessageBox
+from PySide6.QtWidgets import QSystemTrayIcon, QMenu
 from PySide6.QtGui import QIcon, QPixmap, QPainter, QColor, QAction
 from PySide6.QtCore import Signal, Qt
 
+from gui.theme import MessageBox
 from utils.resource_path import get_resource_path
 from pathlib import Path
 
@@ -105,19 +106,11 @@ class SystemTrayIcon(QSystemTrayIcon):
         self.show_notification("Error", message, QSystemTrayIcon.MessageIcon.Critical, 5000)
 
     def _show_about(self):
-        from importlib.metadata import version as pkg_version, PackageNotFoundError
-        try:
-            app_version = pkg_version("cadence")
-        except PackageNotFoundError:
-            app_version = "dev"
-        msg = QMessageBox()
-        msg.setWindowTitle("About Cadence")
-        msg.setText(
-            f"Cadence - Meeting Transcription\n\n"
+        from version import __version__
+        MessageBox.information(
+            None, "About Cadence",
+            f"Cadence v{__version__}\n\n"
             f"Real-time meeting transcription with speaker attribution.\n"
             f"Records mic + system audio, transcribes locally with Whisper.\n\n"
-            f"Created by William Horne\n"
-            f"Version {app_version}"
+            f"Created by William Horne"
         )
-        msg.setIcon(QMessageBox.Icon.Information)
-        msg.exec()
