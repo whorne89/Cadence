@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from core.echo_gate import is_echo, deduplicate_segments, get_audio_for_sample_range
+from core.echo_gate import is_echo, deduplicate_segments, get_audio_for_sample_range, _word_overlap
 
 
 # ── Helper to create speech-like test signals ────────────────────
@@ -157,7 +157,18 @@ def test_deduplicate_partial_text_match():
         {"speaker": "them", "text": "I think we should go ahead with the plan", "start": 1.0},
         {"speaker": "you", "text": "I think we should go ahead with the plan.", "start": 1.1},
     ]
-    result = deduplicate_segments(segments, similarity_threshold=0.6)
+    result = deduplicate_segments(segments)
+    assert len(result) == 1
+    assert result[0]["speaker"] == "them"
+
+
+def test_deduplicate_substring_echo():
+    """Mic echo that's a fragment of a longer system segment."""
+    segments = [
+        {"speaker": "them", "text": "If you have a large army of drones that can operate without human oversight", "start": 1.0},
+        {"speaker": "you", "text": "that can operate without human oversight,", "start": 1.3},
+    ]
+    result = deduplicate_segments(segments)
     assert len(result) == 1
     assert result[0]["speaker"] == "them"
 
@@ -174,3 +185,26 @@ def test_deduplicate_no_system_segments():
     ]
     result = deduplicate_segments(segments)
     assert len(result) == 1
+
+
+def test_word_overlap_identical():
+    """Identical text should have 100% overlap."""
+    assert _word_overlap("hello world", "hello world") == 1.0
+
+
+def test_word_overlap_subset():
+    """Mic text subset of system text should have high overlap."""
+    overlap = _word_overlap(
+        "should not be allowed",
+        "Those two use cases should not be allowed the Pentagon has told us",
+    )
+    assert overlap >= 0.8
+
+
+def test_word_overlap_different():
+    """Unrelated text should have low overlap."""
+    overlap = _word_overlap(
+        "I had a great day today",
+        "The weather forecast calls for rain tomorrow",
+    )
+    assert overlap < 0.3

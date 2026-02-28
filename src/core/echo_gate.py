@@ -11,7 +11,6 @@ provides tools to detect and suppress this cross-talk:
 """
 
 import numpy as np
-from difflib import SequenceMatcher
 
 
 def _energy_envelope(audio, window_ms=20, sample_rate=16000):
@@ -114,18 +113,31 @@ def get_audio_for_sample_range(frames, start_sample, end_sample):
     return np.concatenate(chunks) if chunks else np.array([], dtype=np.float32)
 
 
-def deduplicate_segments(segments, time_window=3.0, similarity_threshold=0.6):
+def _word_overlap(mic_text, sys_text):
+    """Fraction of mic words that appear in system text."""
+    # Strip punctuation for comparison
+    strip = str.maketrans("", "", ".,!?;:'\"()-")
+    mic_words = set(mic_text.lower().translate(strip).split())
+    sys_words = set(sys_text.lower().translate(strip).split())
+    mic_words.discard("")
+    if not mic_words:
+        return 0.0
+    return len(mic_words & sys_words) / len(mic_words)
+
+
+def deduplicate_segments(segments, time_window=8.0, word_overlap_threshold=0.5):
     """
     Remove mic segments that are echo of system audio segments.
 
-    Compares overlapping mic ("you") and system ("them") segments by
-    text similarity. If a mic segment closely matches a system segment
-    within the time window, it's echo and gets removed.
+    Uses word overlap rather than sequence matching — if most words in
+    a mic segment also appear in a nearby system segment, it's echo.
+    This is robust to Whisper transcribing the same speech slightly
+    differently from mic vs loopback.
 
     Args:
         segments: List of {"speaker", "text", "start"} dicts, sorted by start time
         time_window: Max time difference (seconds) to consider as potential echo
-        similarity_threshold: Text similarity (0-1) above which echo is detected
+        word_overlap_threshold: Fraction of mic words found in system text (0-1)
 
     Returns:
         Filtered list with echo duplicates removed
@@ -143,7 +155,7 @@ def deduplicate_segments(segments, time_window=3.0, similarity_threshold=0.6):
         if seg["speaker"] != "you":
             continue
 
-        mic_text = seg["text"].lower().strip()
+        mic_text = seg["text"]
         mic_start = seg["start"]
 
         for sys_seg in sys_segments:
@@ -151,10 +163,9 @@ def deduplicate_segments(segments, time_window=3.0, similarity_threshold=0.6):
             if abs(mic_start - sys_seg["start"]) > time_window:
                 continue
 
-            # Compare text similarity
-            sys_text = sys_seg["text"].lower().strip()
-            similarity = SequenceMatcher(None, mic_text, sys_text).ratio()
-            if similarity > similarity_threshold:
+            # Word overlap: what fraction of mic words appear in system text
+            overlap = _word_overlap(mic_text, sys_seg["text"])
+            if overlap >= word_overlap_threshold:
                 echo_indices.add(i)
                 break
 
