@@ -18,6 +18,8 @@ class SilenceDetector:
 
     def feed(self, audio_chunk: np.ndarray):
         """Feed an audio chunk and update silence tracking."""
+        if len(audio_chunk) == 0:
+            return
         rms = np.sqrt(np.mean(audio_chunk ** 2))
         if rms < self.silence_threshold:
             self._silent_samples += len(audio_chunk)

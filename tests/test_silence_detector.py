@@ -63,3 +63,18 @@ def test_speech_resets_silence_counter():
     sd.feed(silent)
     # only 400ms of silence after speech — not enough
     assert not sd.is_silent()
+
+
+def test_empty_audio_chunk():
+    """Empty audio chunks should be ignored without error."""
+    sd = SilenceDetector(silence_threshold=0.01, min_silence_ms=500, sample_rate=16000)
+    empty = np.array([], dtype=np.float32)
+    sd.feed(empty)
+    assert not sd.is_silent()
+
+    # Empty chunks shouldn't disrupt ongoing silence tracking
+    silent = np.zeros(3200, dtype=np.float32)
+    for _ in range(3):
+        sd.feed(silent)
+    sd.feed(empty)
+    assert sd.is_silent()
