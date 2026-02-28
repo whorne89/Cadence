@@ -44,37 +44,33 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(central)
         layout.setContentsMargins(4, 4, 4, 4)
 
-        # Header: status badge | timer | word count
+        # Compact header: [BADGE] 00:00:00 · 0 words
         header = QHBoxLayout()
-        header.setContentsMargins(4, 4, 4, 4)
+        header.setContentsMargins(2, 2, 2, 2)
+        header.setSpacing(8)
 
         self.status_label = QLabel("READY")
-        self.status_label.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
+        self.status_label.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
         self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.status_label.setFixedHeight(28)
-        self.status_label.setMinimumWidth(100)
+        self.status_label.setFixedHeight(22)
         self._set_status_badge("idle")
         header.addWidget(self.status_label)
 
-        header.addStretch()
-
         self.timer_label = QLabel("00:00:00")
-        self.timer_label.setFont(QFont("Consolas", 14))
+        self.timer_label.setFont(QFont("Consolas", 11))
         header.addWidget(self.timer_label)
 
-        header.addStretch()
+        sep = QLabel("\u00b7")
+        sep.setStyleSheet("color: #888;")
+        header.addWidget(sep)
 
         self.info_label = QLabel("0 words")
-        self.info_label.setFont(QFont("Segoe UI", 10))
+        self.info_label.setFont(QFont("Segoe UI", 9))
         self.info_label.setStyleSheet("color: #888;")
         header.addWidget(self.info_label)
 
+        header.addStretch()
         layout.addLayout(header)
-
-        # Separator
-        line = QFrame()
-        line.setFrameShape(QFrame.Shape.HLine)
-        layout.addWidget(line)
 
         # 3-panel splitter
         self.splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -83,17 +79,20 @@ class MainWindow(QMainWindow):
         left_panel = QWidget()
         left_layout = QVBoxLayout(left_panel)
         left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.setSpacing(2)
         folder_label = QLabel("Folders")
-        folder_label.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
+        folder_label.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
         left_layout.addWidget(folder_label)
         self.folder_tree = QTreeWidget()
         self.folder_tree.setHeaderHidden(True)
-        self.folder_tree.setFont(QFont("Segoe UI", 10))
+        self.folder_tree.setFont(QFont("Segoe UI", 9))
         self.folder_tree.itemClicked.connect(self._on_folder_clicked)
         self.folder_tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.folder_tree.customContextMenuRequested.connect(self._on_folder_context_menu)
         left_layout.addWidget(self.folder_tree)
-        self.add_folder_btn = QPushButton("+ New Folder")
+        self.add_folder_btn = QPushButton("+")
+        self.add_folder_btn.setFixedHeight(24)
+        self.add_folder_btn.setToolTip("New Folder")
         self.add_folder_btn.clicked.connect(self._on_add_folder)
         left_layout.addWidget(self.add_folder_btn)
         self.splitter.addWidget(left_panel)
@@ -102,11 +101,12 @@ class MainWindow(QMainWindow):
         mid_panel = QWidget()
         mid_layout = QVBoxLayout(mid_panel)
         mid_layout.setContentsMargins(0, 0, 0, 0)
+        mid_layout.setSpacing(2)
         transcript_label = QLabel("Transcripts")
-        transcript_label.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
+        transcript_label.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
         mid_layout.addWidget(transcript_label)
         self.transcript_list = QListWidget()
-        self.transcript_list.setFont(QFont("Segoe UI", 10))
+        self.transcript_list.setFont(QFont("Segoe UI", 9))
         self.transcript_list.itemClicked.connect(self._on_transcript_clicked)
         self.transcript_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.transcript_list.customContextMenuRequested.connect(self._on_transcript_context_menu)
@@ -123,8 +123,11 @@ class MainWindow(QMainWindow):
         right_layout.addWidget(self.transcript_area)
         self.splitter.addWidget(right_panel)
 
-        # Set initial splitter sizes (150, 150, remaining)
-        self.splitter.setSizes([150, 150, 500])
+        # Collapsible side panels, transcript viewer gets priority
+        self.splitter.setCollapsible(0, True)   # folders
+        self.splitter.setCollapsible(1, True)   # transcripts
+        self.splitter.setCollapsible(2, False)  # viewer
+        self.splitter.setSizes([140, 140, 520])
         layout.addWidget(self.splitter)
 
         # Bottom controls
