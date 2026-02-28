@@ -71,6 +71,7 @@ class TranscriptionWorker(QObject):
 
         # Per-source silence detectors
         from core.silence_detector import SilenceDetector
+        from core.echo_gate import is_echo, get_audio_for_sample_range
         mic_detector = SilenceDetector(self.silence_threshold, self.min_silence_ms, sr)
         sys_detector = SilenceDetector(self.silence_threshold, self.min_silence_ms, sr)
 
@@ -113,9 +114,26 @@ class TranscriptionWorker(QObject):
                 )
 
                 if should_transcribe:
-                    prev_samples = sum(len(f) for f in mic_frames[:mic_speech_start])
-                    timestamp = prev_samples / sr
-                    self._transcribe_frames(speech_frames, "you", timestamp)
+                    mic_start_sample = sum(len(f) for f in mic_frames[:mic_speech_start])
+                    timestamp = mic_start_sample / sr
+
+                    # Echo gate: suppress mic if it's just system audio bleed
+                    echo_detected = False
+                    if sys_detector._has_had_speech:
+                        mic_audio = np.concatenate(speech_frames)
+                        mic_end_sample = mic_start_sample + len(mic_audio)
+                        sys_audio = get_audio_for_sample_range(
+                            self.audio_recorder._system_frames,
+                            mic_start_sample, mic_end_sample,
+                        )
+                        if len(sys_audio) > 0:
+                            echo_detected = is_echo(mic_audio, sys_audio)
+
+                    if echo_detected:
+                        logger.debug(f"Echo suppressed at {timestamp:.1f}s")
+                    else:
+                        self._transcribe_frames(speech_frames, "you", timestamp)
+
                     mic_speech_start = mic_offset
                     mic_detector.reset()
                 elif mic_detector.is_silent() and not mic_detector._has_had_speech:
@@ -229,8 +247,10 @@ class PostProcessWorker(QObject):
                         "start": seg["start"],
                     })
 
-            # Sort by timestamp
+            # Sort by timestamp, then remove echo duplicates
             segments.sort(key=lambda s: s["start"])
+            from core.echo_gate import deduplicate_segments
+            segments = deduplicate_segments(segments)
 
         except Exception as e:
             logger.error(f"Post-processing error: {e}")

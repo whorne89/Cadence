@@ -9,9 +9,16 @@ def test_postprocess_worker_emits_segments():
     from src.main import PostProcessWorker
 
     transcriber = MagicMock()
-    transcriber.transcribe.return_value = [
-        {"text": "Hello there.", "start": 0.0, "end": 1.5},
-        {"text": "How are you?", "start": 2.0, "end": 3.2},
+    # Different text per channel so echo dedup doesn't remove them
+    transcriber.transcribe.side_effect = [
+        [
+            {"text": "I said hello.", "start": 0.0, "end": 1.5},
+            {"text": "Yes I agree.", "start": 2.0, "end": 3.2},
+        ],
+        [
+            {"text": "Hi there.", "start": 0.5, "end": 1.8},
+            {"text": "Let's do it.", "start": 3.0, "end": 4.0},
+        ],
     ]
 
     sr = 16000
@@ -26,7 +33,7 @@ def test_postprocess_worker_emits_segments():
 
     assert len(results) == 1
     segments = results[0]
-    # Should have 4 segments (2 from mic + 2 from system)
+    # Should have 4 segments (2 from mic + 2 from system, all different text)
     assert len(segments) == 4
 
 
