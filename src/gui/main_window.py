@@ -514,6 +514,10 @@ class MainWindow(QWidget):
                 "background-color:#2ea043; color:white;"
                 " border:1px solid #2ea043; border-radius:4px; padding:2px 12px;"
             ),
+            "processing": (
+                "background-color:#d29922; color:white;"
+                " border:1px solid #d29922; border-radius:4px; padding:2px 12px;"
+            ),
         }
         self.status_label.setStyleSheet(styles.get(state, styles["idle"]))
 
@@ -549,6 +553,14 @@ class MainWindow(QWidget):
         self.record_btn.setStyleSheet("")
         self.status_label.setText("DONE")
         self._set_status_badge("done")
+        self._timer.stop()
+
+    def set_processing_state(self, message="Processing..."):
+        self._recording = False
+        self.record_btn.setEnabled(False)
+        self.record_btn.setText("Processing...")
+        self.status_label.setText(message)
+        self._set_status_badge("processing")
         self._timer.stop()
 
     # ── Transcript display ───────────────────────────────────────

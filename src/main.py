@@ -272,6 +272,10 @@ class CadenceApp(QObject):
         self._current_segments = []
         self._selected_folder = None
 
+        self._postprocess_thread = None
+        self._postprocess_worker = None
+        self._recording_duration = 0.0
+
         self.logger.info("Application initialized")
 
     def _on_segment(self, speaker, text, timestamp):
@@ -348,40 +352,84 @@ class CadenceApp(QObject):
             self._transcription_worker = None
 
     def stop_recording(self):
-        """Stop recording, finalize transcription, and save the transcript."""
+        """Stop recording and launch post-processing."""
         self.logger.info("Stopping recording...")
 
         # Stop transcription worker first
         self._stop_transcription_worker()
 
-        # Stop audio capture
-        self.audio_recorder.stop_recording()
-        duration = self.audio_recorder.get_duration()
+        # Stop audio capture — returns full audio arrays
+        mic_audio, system_audio = self.audio_recorder.stop_recording()
+        self._recording_duration = self.audio_recorder.get_duration()
 
-        # Save transcript to selected folder (or auto date folder)
-        transcript = self._current_segments
+        # Update UI to processing state
+        if self.main_window is not None:
+            self.main_window.set_processing_state("Cleaning up transcript...")
+
+        # Launch post-processing in background thread
+        self._start_postprocess(mic_audio, system_audio)
+
+    def _start_postprocess(self, mic_audio, system_audio):
+        """Launch PostProcessWorker in a background QThread."""
+        self._postprocess_thread = QThread()
+        self._postprocess_worker = PostProcessWorker(
+            self.streaming_transcriber, mic_audio, system_audio
+        )
+        self._postprocess_worker.moveToThread(self._postprocess_thread)
+
+        self._postprocess_thread.started.connect(self._postprocess_worker.run)
+        self._postprocess_worker.progress.connect(self._on_postprocess_progress)
+        self._postprocess_worker.segments_ready.connect(self._on_postprocess_done)
+        self._postprocess_worker.finished.connect(self._cleanup_postprocess_thread)
+
+        self._postprocess_thread.start()
+
+    def _on_postprocess_progress(self, message):
+        """Update UI with post-processing progress."""
+        if self.main_window is not None:
+            self.main_window.status_label.setText(message)
+
+    def _on_postprocess_done(self, segments):
+        """Replace live transcript with post-processed segments and save."""
+        self.logger.info(f"Post-processing complete: {len(segments)} segments")
+
+        # Replace live segments with cleaned version
+        self._current_segments = segments
+
+        # Update transcript display
+        if self.main_window is not None:
+            self.main_window.set_transcript(segments)
+            self.main_window.set_done_state()
+
+        # Save transcript
         model = self.config.get_streaming_model_size()
         self.session_manager.save_transcript(
-            transcript, duration=duration, model=model,
+            segments, duration=self._recording_duration, model=model,
             folder=self._selected_folder,
         )
 
-        # Refresh folder/transcript lists so the new file appears
+        # Refresh folder/transcript lists
         self._refresh_folders()
         if self._selected_folder:
             self.on_folder_selected(self._selected_folder)
 
-        # Update UI
-        if self.main_window is not None:
-            self.main_window.set_done_state()
         if self.tray_icon is not None:
             self.tray_icon.set_idle_state()
             self.tray_icon.show_notification(
-                "Recording Stopped",
-                f"Duration: {int(duration)}s"
+                "Recording Complete",
+                f"Duration: {int(self._recording_duration)}s"
             )
 
-        self.logger.info(f"Recording stopped. Duration: {duration:.1f}s")
+    def _cleanup_postprocess_thread(self):
+        """Clean up post-processing thread resources."""
+        if self._postprocess_thread is not None:
+            self._postprocess_thread.quit()
+            self._postprocess_thread.wait(2000)
+            self._postprocess_thread.deleteLater()
+            self._postprocess_thread = None
+        if self._postprocess_worker is not None:
+            self._postprocess_worker.deleteLater()
+            self._postprocess_worker = None
 
     def show_settings(self):
         """Open the settings dialog."""
@@ -478,6 +526,11 @@ class CadenceApp(QObject):
 
         # Stop transcription worker
         self._stop_transcription_worker()
+
+        # Stop post-processing if running
+        if self._postprocess_thread is not None and self._postprocess_thread.isRunning():
+            self._postprocess_thread.quit()
+            self._postprocess_thread.wait(3000)
 
         # Stop recording if active
         if self.audio_recorder.is_recording:
