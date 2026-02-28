@@ -4,7 +4,7 @@ Settings dialog for Cadence.
 
 from PySide6.QtWidgets import (
     QVBoxLayout, QFormLayout, QHBoxLayout,
-    QComboBox, QGroupBox, QPushButton, QSpinBox,
+    QComboBox, QGroupBox, QPushButton,
 )
 from PySide6.QtCore import Signal
 
@@ -35,14 +35,6 @@ class SettingsDialog(RoundedDialog):
         for m in ["tiny", "base", "small"]:
             self.streaming_model_combo.addItem(m.capitalize(), m)
         model_layout.addRow("Model:", self.streaming_model_combo)
-
-        # Transcription interval
-        interval_layout = QHBoxLayout()
-        self.interval_spin = QSpinBox()
-        self.interval_spin.setRange(2, 8)
-        self.interval_spin.setSuffix(" seconds")
-        interval_layout.addWidget(self.interval_spin)
-        model_layout.addRow("Update interval:", interval_layout)
 
         model_group.setLayout(model_layout)
         layout.addWidget(model_group)
@@ -89,14 +81,10 @@ class SettingsDialog(RoundedDialog):
         idx = self.streaming_model_combo.findData(streaming)
         if idx >= 0:
             self.streaming_model_combo.setCurrentIndex(idx)
-        interval = int(self.config.get_transcription_interval())
-        self.interval_spin.setValue(interval)
 
     def _save_settings(self):
         self.config.set("whisper", "streaming_model_size",
                         value=self.streaming_model_combo.currentData())
-        self.config.set("whisper", "transcription_interval",
-                        value=float(self.interval_spin.value()))
         self.config.set("audio", "mic_device_index",
                         value=self.mic_combo.currentData())
         self.config.set("audio", "system_device_index",

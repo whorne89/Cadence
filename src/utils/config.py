@@ -19,7 +19,6 @@ class ConfigManager:
             "language": "en",
             "compute_type": "int8",
             "streaming_model_size": "base",
-            "transcription_interval": 5.0,
         },
         "audio": {
             "sample_rate": 16000,
@@ -90,9 +89,6 @@ class ConfigManager:
 
     def get_streaming_model_size(self):
         return self.get("whisper", "streaming_model_size", default="base")
-
-    def get_transcription_interval(self):
-        return self.get("whisper", "transcription_interval", default=5.0)
 
     def get_mic_device(self):
         return self.get("audio", "mic_device_index", default=None)

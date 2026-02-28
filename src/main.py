@@ -458,8 +458,6 @@ class CadenceApp(QObject):
         if streaming_model != self.streaming_transcriber.model_size:
             self.streaming_transcriber.change_model(streaming_model)
 
-        # Note: transcription interval is read fresh each time recording starts
-
     def on_folder_selected(self, folder_name):
         """Load and display transcripts for the selected folder."""
         self._selected_folder = folder_name
