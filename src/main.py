@@ -78,6 +78,10 @@ class TranscriptionWorker(QObject):
         mic_speech_start = 0
         sys_speech_start = 0
 
+        # Initialize frame references before loop (avoids NameError if loop never runs)
+        mic_frames = self.audio_recorder._mic_frames
+        sys_frames = self.audio_recorder._system_frames
+
         logger.info(
             f"Transcription worker started (silence_threshold={self.silence_threshold}, "
             f"min_silence={self.min_silence_ms}ms, max_speech={self.max_speech_s}s)"
