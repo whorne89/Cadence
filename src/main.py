@@ -173,6 +173,62 @@ class TranscriptionWorker(QObject):
         self._running = False
 
 
+class PostProcessWorker(QObject):
+    """
+    Re-transcribes full audio after recording stops.
+
+    Runs in a QThread. Takes complete mic and system audio arrays,
+    transcribes each with vad_filter=True for clean segment boundaries,
+    and emits the merged result.
+    """
+
+    segments_ready = Signal(list)  # list of {speaker, text, start} dicts
+    progress = Signal(str)  # status message
+    finished = Signal()
+
+    def __init__(self, transcriber, mic_audio, system_audio):
+        super().__init__()
+        self.transcriber = transcriber
+        self.mic_audio = mic_audio
+        self.system_audio = system_audio
+
+    def run(self):
+        """Transcribe full audio and emit cleaned segments."""
+        segments = []
+
+        try:
+            # Transcribe mic audio
+            if len(self.mic_audio) > 0:
+                self.progress.emit("Processing microphone audio...")
+                mic_segments = self.transcriber.transcribe(self.mic_audio)
+                for seg in mic_segments:
+                    segments.append({
+                        "speaker": "you",
+                        "text": seg["text"],
+                        "start": seg["start"],
+                    })
+
+            # Transcribe system audio
+            if len(self.system_audio) > 0:
+                self.progress.emit("Processing system audio...")
+                sys_segments = self.transcriber.transcribe(self.system_audio)
+                for seg in sys_segments:
+                    segments.append({
+                        "speaker": "them",
+                        "text": seg["text"],
+                        "start": seg["start"],
+                    })
+
+            # Sort by timestamp
+            segments.sort(key=lambda s: s["start"])
+
+        except Exception as e:
+            logger.error(f"Post-processing error: {e}")
+
+        self.segments_ready.emit(segments)
+        self.finished.emit()
+
+
 class CadenceApp(QObject):
     """Main application controller that wires all components together."""
 
