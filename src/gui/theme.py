@@ -6,9 +6,9 @@ Single source of truth — applied once at startup via apply_theme().
 from PySide6.QtWidgets import QApplication, QDialog, QPushButton, QVBoxLayout, QHBoxLayout, QLabel
 from PySide6.QtGui import (
     QPalette, QColor, QPainter, QPen, QBrush, QPainterPath,
-    QGuiApplication, QRegion, QFont,
+    QGuiApplication, QRegion, QFont, QPixmap, QIcon,
 )
-from PySide6.QtCore import Qt, QTimer, QPropertyAnimation, QEasingCurve
+from PySide6.QtCore import Qt, QTimer, QPropertyAnimation, QEasingCurve, QPointF
 
 # -- Color tokens (importable by other modules) ----------------------------
 BG_PRIMARY = "#1a1a2e"
@@ -273,36 +273,44 @@ QSplitter::handle {{
 
 /* -- Scroll bars ------------------------------------------ */
 QScrollBar:vertical {{
-    background-color: {BG_PRIMARY};
-    width: 10px;
+    background: transparent;
+    width: 6px;
+    margin: 4px 1px;
     border: none;
 }}
 QScrollBar::handle:vertical {{
-    background-color: {BORDER};
-    border-radius: 4px;
-    min-height: 20px;
+    background-color: rgba(255, 255, 255, 40);
+    border-radius: 3px;
+    min-height: 30px;
 }}
 QScrollBar::handle:vertical:hover {{
-    background-color: {ACCENT_HOVER};
+    background-color: rgba(255, 255, 255, 70);
 }}
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
     height: 0px;
 }}
+QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
+    background: transparent;
+}}
 QScrollBar:horizontal {{
-    background-color: {BG_PRIMARY};
-    height: 10px;
+    background: transparent;
+    height: 6px;
+    margin: 1px 4px;
     border: none;
 }}
 QScrollBar::handle:horizontal {{
-    background-color: {BORDER};
-    border-radius: 4px;
-    min-width: 20px;
+    background-color: rgba(255, 255, 255, 40);
+    border-radius: 3px;
+    min-width: 30px;
 }}
 QScrollBar::handle:horizontal:hover {{
-    background-color: {ACCENT_HOVER};
+    background-color: rgba(255, 255, 255, 70);
 }}
 QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{
     width: 0px;
+}}
+QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {{
+    background: transparent;
 }}
 
 /* -- Tooltips --------------------------------------------- */
@@ -341,6 +349,25 @@ def apply_theme(app: QApplication):
     app.setPalette(palette)
 
 
+# -- Painted icons ---------------------------------------------------------
+
+def _dialog_close_icon(size=14):
+    """Create a painted X icon for dialog close buttons."""
+    pix = QPixmap(size, size)
+    pix.fill(Qt.GlobalColor.transparent)
+    p = QPainter(pix)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    pen = QPen(QColor(255, 255, 255, 180))
+    pen.setWidthF(1.5)
+    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+    p.setPen(pen)
+    m = size * 0.25
+    p.drawLine(QPointF(m, m), QPointF(size - m, size - m))
+    p.drawLine(QPointF(size - m, m), QPointF(m, size - m))
+    p.end()
+    return QIcon(pix)
+
+
 # -- Rounded frameless dialog -----------------------------------------------
 
 class RoundedDialog(QDialog):
@@ -361,7 +388,8 @@ class RoundedDialog(QDialog):
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
 
-        self._close_btn = QPushButton("\u2715", self)  # X
+        self._close_btn = QPushButton(self)
+        self._close_btn.setIcon(_dialog_close_icon())
         self._close_btn.setObjectName("_rdClose")
         self._close_btn.setFixedSize(28, 28)
         self._close_btn.clicked.connect(self.reject)
@@ -369,15 +397,11 @@ class RoundedDialog(QDialog):
         self._close_btn.setStyleSheet(f"""
             QPushButton#_rdClose {{
                 background: transparent;
-                color: rgba(255, 255, 255, 180);
                 border: none;
                 border-radius: 14px;
-                font-size: 14px;
-                font-weight: bold;
             }}
             QPushButton#_rdClose:hover {{
                 background-color: #e74c3c;
-                color: white;
             }}
         """)
 
