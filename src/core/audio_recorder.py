@@ -29,13 +29,12 @@ class AudioRecorder:
     Mic: via sounddevice (InputStream)
     System: via PyAudioWPatch (WASAPI loopback)
 
-    Audio chunks are delivered via callbacks for real-time processing.
+    Accumulated frames are available via _mic_frames / _system_frames
+    for the TranscriptionWorker to process.
     """
 
-    def __init__(self, sample_rate=16000, chunk_duration=1.0, chunk_callback=None):
+    def __init__(self, sample_rate=16000):
         self.sample_rate = sample_rate
-        self.chunk_duration = chunk_duration
-        self.chunk_callback = chunk_callback
 
         self.is_recording = False
         self._mic_thread = None
@@ -112,7 +111,6 @@ class AudioRecorder:
 
     def _record_mic(self):
         """Record from microphone via sounddevice."""
-        chunk_samples = int(self.sample_rate * self.chunk_duration)
         audio_queue = queue.Queue()
 
         def callback(indata, frames, time_info, status):
@@ -121,8 +119,6 @@ class AudioRecorder:
             audio_queue.put(indata[:, 0].copy())
 
         try:
-            buffer = []
-            buffer_len = 0
             with sd.InputStream(
                 samplerate=self.sample_rate,
                 channels=1,
@@ -136,20 +132,7 @@ class AudioRecorder:
                         audio = audio_queue.get(timeout=0.1)
                     except queue.Empty:
                         continue
-
                     self._mic_frames.append(audio)
-                    buffer.append(audio)
-                    buffer_len += len(audio)
-
-                    if buffer_len >= chunk_samples:
-                        chunk = np.concatenate(buffer)[:chunk_samples]
-                        buffer.clear()
-                        buffer_len = 0
-                        if self.chunk_callback:
-                            try:
-                                self.chunk_callback(chunk, "mic")
-                            except Exception as e:
-                                logger.error(f"Mic chunk callback error: {e}")
         except Exception as e:
             logger.error(f"Mic recording error: {e}")
 
@@ -159,8 +142,6 @@ class AudioRecorder:
             return
 
         p = pyaudio.PyAudio()
-        chunk_samples = int(self.sample_rate * self.chunk_duration)
-        buffer = []
         pyaudio_chunk = 1024
 
         try:
@@ -203,17 +184,6 @@ class AudioRecorder:
                     audio = resample(audio, target_len).astype(np.float32)
 
                 self._system_frames.append(audio.copy())
-                buffer.append(audio.copy())
-
-                total = sum(len(b) for b in buffer)
-                if total >= chunk_samples:
-                    chunk = np.concatenate(buffer)[:chunk_samples]
-                    buffer.clear()
-                    if self.chunk_callback:
-                        try:
-                            self.chunk_callback(chunk, "system")
-                        except Exception as e:
-                            logger.error(f"System chunk callback error: {e}")
 
             stream.stop_stream()
             stream.close()
@@ -239,11 +209,6 @@ class AudioRecorder:
 
         logger.info(f"Recording stopped. Duration: {self.get_duration():.1f}s")
         return mic_audio, system_audio
-
-    def save_audio(self, audio_data, filepath):
-        """Save numpy audio to WAV file."""
-        import soundfile as sf
-        sf.write(filepath, audio_data, self.sample_rate)
 
     def get_duration(self):
         """Get current recording duration in seconds."""
