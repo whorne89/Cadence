@@ -106,7 +106,8 @@ class TranscriptionWorker(QObject):
                 speech_duration = speech_samples / sr
 
                 should_transcribe = (
-                    mic_detector.is_silent() and speech_duration > 0.5
+                    mic_detector.is_silent() and mic_detector._has_had_speech
+                    and speech_duration > 0.5
                 ) or (
                     speech_duration >= self.max_speech_s
                 )
@@ -115,6 +116,10 @@ class TranscriptionWorker(QObject):
                     prev_samples = sum(len(f) for f in mic_frames[:mic_speech_start])
                     timestamp = prev_samples / sr
                     self._transcribe_frames(speech_frames, "you", timestamp)
+                    mic_speech_start = mic_offset
+                    mic_detector.reset()
+                elif mic_detector.is_silent() and not mic_detector._has_had_speech:
+                    # Pure silence — skip ahead without transcribing
                     mic_speech_start = mic_offset
                     mic_detector.reset()
 
@@ -132,7 +137,8 @@ class TranscriptionWorker(QObject):
                 speech_duration = speech_samples / sr
 
                 should_transcribe = (
-                    sys_detector.is_silent() and speech_duration > 0.5
+                    sys_detector.is_silent() and sys_detector._has_had_speech
+                    and speech_duration > 0.5
                 ) or (
                     speech_duration >= self.max_speech_s
                 )
@@ -141,6 +147,10 @@ class TranscriptionWorker(QObject):
                     prev_samples = sum(len(f) for f in sys_frames[:sys_speech_start])
                     timestamp = prev_samples / sr
                     self._transcribe_frames(speech_frames, "them", timestamp)
+                    sys_speech_start = sys_offset
+                    sys_detector.reset()
+                elif sys_detector.is_silent() and not sys_detector._has_had_speech:
+                    # Pure silence — skip ahead without transcribing
                     sys_speech_start = sys_offset
                     sys_detector.reset()
 
