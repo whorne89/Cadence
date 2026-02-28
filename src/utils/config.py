@@ -19,7 +19,7 @@ class ConfigManager:
             "language": "en",
             "compute_type": "int8",
             "streaming_model_size": "base",
-            "reprocess_model_size": "small",
+            "transcription_interval": 5.0,
         },
         "audio": {
             "sample_rate": 16000,
@@ -27,10 +27,7 @@ class ConfigManager:
             "system_device_index": None,
             "channels": 1,
         },
-        "session": {
-            "auto_reprocess": False,
-            "save_audio": True,
-        },
+        "session": {},
         "ui": {
             "show_notifications": True,
             "minimize_to_tray": True,
@@ -94,8 +91,8 @@ class ConfigManager:
     def get_streaming_model_size(self):
         return self.get("whisper", "streaming_model_size", default="base")
 
-    def get_reprocess_model_size(self):
-        return self.get("whisper", "reprocess_model_size", default="small")
+    def get_transcription_interval(self):
+        return self.get("whisper", "transcription_interval", default=5.0)
 
     def get_mic_device(self):
         return self.get("audio", "mic_device_index", default=None)

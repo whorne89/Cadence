@@ -40,3 +40,20 @@ def test_config_get_with_default(tmp_path):
     from src.utils.config import ConfigManager
     config = ConfigManager(config_file=tmp_path / "settings.json")
     assert config.get("nonexistent", "key", default="fallback") == "fallback"
+
+
+def test_transcription_interval_default(tmp_path):
+    """get_transcription_interval() should return 5.0 by default."""
+    from src.utils.config import ConfigManager
+    config = ConfigManager(config_file=tmp_path / "settings.json")
+    assert config.get_transcription_interval() == 5.0
+
+
+def test_transcription_interval_range(tmp_path):
+    """transcription_interval should accept values in the valid range."""
+    from src.utils.config import ConfigManager
+    config = ConfigManager(config_file=tmp_path / "settings.json")
+    config.set("whisper", "transcription_interval", value=2.0)
+    assert config.get_transcription_interval() == 2.0
+    config.set("whisper", "transcription_interval", value=8.0)
+    assert config.get_transcription_interval() == 8.0
