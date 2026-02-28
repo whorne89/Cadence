@@ -223,12 +223,18 @@ class PostProcessWorker(QObject):
     def run(self):
         """Transcribe full audio and emit cleaned segments."""
         segments = []
+        has_both = len(self.mic_audio) > 0 and len(self.system_audio) > 0
 
         try:
             # Transcribe mic audio
             if len(self.mic_audio) > 0:
                 self.progress.emit("Processing microphone audio...")
-                mic_segments = self.transcriber.transcribe(self.mic_audio)
+                def mic_progress(p):
+                    pct = int(p * (50 if has_both else 100))
+                    self.progress.emit(f"Processing microphone audio... {pct}%")
+                mic_segments = self.transcriber.transcribe(
+                    self.mic_audio, progress_callback=mic_progress,
+                )
                 for seg in mic_segments:
                     segments.append({
                         "speaker": "you",
@@ -239,7 +245,12 @@ class PostProcessWorker(QObject):
             # Transcribe system audio
             if len(self.system_audio) > 0:
                 self.progress.emit("Processing system audio...")
-                sys_segments = self.transcriber.transcribe(self.system_audio)
+                def sys_progress(p):
+                    pct = int((50 if has_both else 0) + p * (50 if has_both else 100))
+                    self.progress.emit(f"Processing system audio... {pct}%")
+                sys_segments = self.transcriber.transcribe(
+                    self.system_audio, progress_callback=sys_progress,
+                )
                 for seg in sys_segments:
                     segments.append({
                         "speaker": "them",

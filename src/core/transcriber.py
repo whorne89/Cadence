@@ -46,19 +46,21 @@ class Transcriber:
         )
         logger.info("Model loaded successfully")
 
-    def transcribe(self, audio_data, language=None):
+    def transcribe(self, audio_data, language=None, progress_callback=None):
         """
         Transcribe audio data to text.
 
         Args:
             audio_data: numpy array of float32 audio samples at 16kHz
             language: Language code or None for auto-detect
+            progress_callback: Optional callable(float) receiving progress 0.0-1.0
 
         Returns:
             List of dicts with 'text', 'start', 'end' keys
         """
         with self._lock:
             self._load_model()
+            total_duration = len(audio_data) / 16000.0
             with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
                 temp_path = f.name
                 sf.write(temp_path, audio_data, 16000)
@@ -76,6 +78,9 @@ class Transcriber:
                         "start": segment.start,
                         "end": segment.end,
                     })
+                    if progress_callback and total_duration > 0:
+                        progress = min(segment.end / total_duration, 1.0)
+                        progress_callback(progress)
                 return results
             finally:
                 try:

@@ -4,25 +4,48 @@ import pytest
 from core.echo_gate import is_echo, deduplicate_segments, get_audio_for_sample_range
 
 
+# ── Helper to create speech-like test signals ────────────────────
+
+def _make_speech_signal(duration_s, base_freq=300, sr=16000, amplitude=0.3,
+                        env_freq=4.0, env_phase=0.0):
+    """Create amplitude-modulated signal mimicking speech envelope."""
+    t = np.linspace(0, duration_s, int(sr * duration_s), dtype=np.float32)
+    carrier = np.sin(2 * np.pi * base_freq * t)
+    for f in [base_freq * 1.5, base_freq * 2, base_freq * 3]:
+        carrier += np.sin(2 * np.pi * f * t) * np.random.uniform(0.1, 0.3)
+    # Syllable-rate envelope
+    envelope = 0.5 + 0.5 * np.sin(2 * np.pi * env_freq * t + env_phase)
+    return (carrier * envelope * amplitude).astype(np.float32)
+
+
 # ── is_echo tests ────────────────────────────────────────────────
 
 
-def test_echo_detected_on_correlated_audio():
-    """Correlated mic and system audio should be detected as echo."""
+def test_echo_detected_on_speech_echo():
+    """Mic picking up speaker audio should be detected as echo."""
     sr = 16000
-    t = np.linspace(0, 1, sr, dtype=np.float32)
-    system = np.sin(2 * np.pi * 440 * t) * 0.3
-    # Mic picks up same signal with attenuation + noise
-    mic = system * 0.5 + np.random.randn(sr).astype(np.float32) * 0.01
+    system = _make_speech_signal(2.0, base_freq=300, sr=sr)
+    # Echo: delayed + attenuated (room bleed)
+    delay = int(sr * 0.008)
+    echo = np.zeros_like(system)
+    echo[delay:] = system[:-delay] * 0.35
+    mic = echo + np.random.randn(len(system)).astype(np.float32) * 0.005
     assert is_echo(mic, system) is True
 
 
-def test_no_echo_on_different_audio():
-    """Unrelated mic and system audio should not be detected as echo."""
+def test_no_echo_when_user_speaks_over():
+    """User talking over system audio should NOT trigger echo."""
     sr = 16000
-    t = np.linspace(0, 1, sr, dtype=np.float32)
-    system = np.sin(2 * np.pi * 440 * t) * 0.3
-    mic = np.sin(2 * np.pi * 880 * t) * 0.3  # Different frequency
+    system = _make_speech_signal(2.0, base_freq=300, sr=sr, amplitude=0.3,
+                                 env_freq=4.0)
+    # Echo from speakers
+    delay = int(sr * 0.008)
+    echo = np.zeros_like(system)
+    echo[delay:] = system[:-delay] * 0.3
+    # User's own voice with different speech rhythm
+    user = _make_speech_signal(2.0, base_freq=150, sr=sr, amplitude=0.4,
+                               env_freq=3.2, env_phase=1.5)
+    mic = echo + user
     assert is_echo(mic, system) is False
 
 
@@ -41,30 +64,29 @@ def test_no_echo_on_short_audio():
     assert is_echo(mic, sys_audio) is False
 
 
-def test_echo_with_delayed_signal():
-    """Echo should still be detected with small delay (speaker-to-mic)."""
+def test_echo_with_reverb():
+    """Echo with multiple reflections should still be detected."""
     sr = 16000
-    t = np.linspace(0, 2, sr * 2, dtype=np.float32)
-    system = np.sin(2 * np.pi * 300 * t) * 0.3
-    # Mic has same signal delayed by 5ms (~80 samples at 16kHz)
-    delay = 80
-    mic = np.zeros_like(system)
-    mic[delay:] = system[:-delay] * 0.4
-    mic += np.random.randn(len(mic)).astype(np.float32) * 0.005
-    # For multi-second chunks, small delay still produces high correlation
+    system = _make_speech_signal(3.0, base_freq=400, sr=sr)
+    # Multiple reflections
+    delay1 = int(sr * 0.005)
+    delay2 = int(sr * 0.020)
+    echo = np.zeros_like(system)
+    echo[delay1:] = system[:-delay1] * 0.35
+    echo[delay2:] += system[:-delay2] * 0.12
+    mic = echo + np.random.randn(len(system)).astype(np.float32) * 0.005
     assert is_echo(mic, system) is True
 
 
-def test_user_speaking_over_system_reduces_correlation():
-    """User talking over system audio should lower correlation."""
+def test_no_echo_independent_speech():
+    """Two independent speech signals should not be detected as echo."""
     sr = 16000
-    t = np.linspace(0, 1, sr, dtype=np.float32)
-    system = np.sin(2 * np.pi * 440 * t) * 0.2
-    # User's voice (different signal) dominates the mic
-    user_voice = np.sin(2 * np.pi * 200 * t) * 0.5
-    mic = system * 0.3 + user_voice
-    # Correlation should be low enough to not trigger echo
-    assert is_echo(mic, system, threshold=0.3) is False
+    system = _make_speech_signal(2.0, base_freq=300, sr=sr,
+                                 env_freq=4.0)
+    # Completely independent mic signal with different rhythm
+    mic = _make_speech_signal(2.0, base_freq=180, sr=sr,
+                              env_freq=3.0, env_phase=2.0)
+    assert is_echo(mic, system) is False
 
 
 # ── get_audio_for_sample_range tests ─────────────────────────────
