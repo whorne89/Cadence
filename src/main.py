@@ -152,6 +152,7 @@ class CadenceApp(QObject):
 
         # Current recording segments
         self._current_segments = []
+        self._selected_folder = None
 
         self.logger.info("Application initialized")
 
@@ -237,10 +238,18 @@ class CadenceApp(QObject):
         self.audio_recorder.stop_recording()
         duration = self.audio_recorder.get_duration()
 
-        # Save transcript
+        # Save transcript to selected folder (or auto date folder)
         transcript = self._current_segments
         model = self.config.get_streaming_model_size()
-        self.session_manager.save_transcript(transcript, duration=duration, model=model)
+        self.session_manager.save_transcript(
+            transcript, duration=duration, model=model,
+            folder=self._selected_folder,
+        )
+
+        # Refresh folder/transcript lists so the new file appears
+        self._refresh_folders()
+        if self._selected_folder:
+            self.on_folder_selected(self._selected_folder)
 
         # Update UI
         if self.main_window is not None:
@@ -286,6 +295,7 @@ class CadenceApp(QObject):
 
     def on_folder_selected(self, folder_name):
         """Load and display transcripts for the selected folder."""
+        self._selected_folder = folder_name
         transcripts = self.session_manager.list_transcripts(folder_name)
         if self.main_window:
             self.main_window.set_transcripts(transcripts)

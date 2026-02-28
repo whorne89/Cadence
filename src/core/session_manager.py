@@ -79,7 +79,16 @@ class SessionManager:
         folder_path.mkdir(parents=True, exist_ok=True)
 
         if name is None:
-            name = f"Recording {datetime.now().strftime('%H-%M')}"
+            now = datetime.now()
+            date_part = f"{now.month}-{now.day}-{str(now.year)[2:]}"
+            time_part = now.strftime("%I.%M %p").lstrip("0")
+            dur_mins = int(duration) // 60
+            dur_secs = int(duration) % 60
+            if dur_mins > 0:
+                dur_part = f"{dur_mins}m {dur_secs}s"
+            else:
+                dur_part = f"{dur_secs}s"
+            name = f"{date_part} {time_part} ({dur_part})"
         else:
             name = self._sanitize_name(name)
 
