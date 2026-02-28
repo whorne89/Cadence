@@ -38,75 +38,132 @@ logger = logging.getLogger("Cadence")
 
 class TranscriptionWorker(QObject):
     """
-    Worker that periodically transcribes accumulated audio from AudioRecorder.
+    Worker that transcribes audio using energy-based silence detection.
 
-    Runs in a QThread. Reads new frames from the recorder's frame lists,
-    transcribes them, and emits results via Qt signals (thread-safe).
+    Instead of a fixed timer, polls for new audio every 200ms and uses
+    RMS energy to detect speech pauses. Transcribes accumulated speech
+    when silence is detected (or when max_speech_s safety valve triggers).
     """
 
     segment_ready = Signal(str, str, float)  # speaker, text, timestamp_seconds
     finished = Signal()
 
-    def __init__(self, transcriber, audio_recorder, interval=5.0):
+    def __init__(self, transcriber, audio_recorder,
+                 silence_threshold=0.01, min_silence_ms=500,
+                 max_speech_s=30.0):
         super().__init__()
         self.transcriber = transcriber
         self.audio_recorder = audio_recorder
-        self.interval = interval
+        self.silence_threshold = silence_threshold
+        self.min_silence_ms = min_silence_ms
+        self.max_speech_s = max_speech_s
         self._running = False
-        self._mic_offset = 0
-        self._system_offset = 0
+        self._poll_interval = 0.2  # 200ms
 
     def run(self):
-        """Main loop — polls for new audio and transcribes it."""
+        """Main loop — polls audio and transcribes on silence boundaries."""
         self._running = True
-        self._mic_offset = 0
-        self._system_offset = 0
+        sr = self.audio_recorder.sample_rate
 
-        logger.info(f"Transcription worker started (interval={self.interval}s)")
+        # Track offsets into frame lists
+        mic_offset = 0
+        sys_offset = 0
+
+        # Per-source silence detectors
+        from core.silence_detector import SilenceDetector
+        mic_detector = SilenceDetector(self.silence_threshold, self.min_silence_ms, sr)
+        sys_detector = SilenceDetector(self.silence_threshold, self.min_silence_ms, sr)
+
+        # Per-source speech buffer start indices
+        mic_speech_start = 0
+        sys_speech_start = 0
+
+        logger.info(
+            f"Transcription worker started (silence_threshold={self.silence_threshold}, "
+            f"min_silence={self.min_silence_ms}ms, max_speech={self.max_speech_s}s)"
+        )
 
         while self._running:
-            time.sleep(self.interval)
-
+            time.sleep(self._poll_interval)
             if not self._running:
                 break
 
-            # Transcribe new mic audio
+            # --- Process mic audio ---
             mic_frames = self.audio_recorder._mic_frames
             mic_len = len(mic_frames)
-            if mic_len > self._mic_offset:
-                new_frames = mic_frames[self._mic_offset:mic_len]
-                # Compute timestamp: samples before this chunk / sample_rate
-                prev_samples = sum(len(f) for f in mic_frames[:self._mic_offset])
-                timestamp = prev_samples / self.audio_recorder.sample_rate
-                self._mic_offset = mic_len
-                try:
-                    audio = np.concatenate(new_frames)
-                    if len(audio) > 0:
-                        text = self.transcriber.transcribe_text(audio)
-                        if text and text.strip():
-                            self.segment_ready.emit("you", text.strip(), timestamp)
-                except Exception as e:
-                    logger.error(f"Mic transcription error: {e}")
+            if mic_len > mic_offset:
+                new_frames = mic_frames[mic_offset:mic_len]
+                for frame in new_frames:
+                    mic_detector.feed(frame)
+                mic_offset = mic_len
 
-            # Transcribe new system audio
+                speech_frames = mic_frames[mic_speech_start:mic_offset]
+                speech_samples = sum(len(f) for f in speech_frames)
+                speech_duration = speech_samples / sr
+
+                should_transcribe = (
+                    mic_detector.is_silent() and speech_duration > 0.5
+                ) or (
+                    speech_duration >= self.max_speech_s
+                )
+
+                if should_transcribe:
+                    prev_samples = sum(len(f) for f in mic_frames[:mic_speech_start])
+                    timestamp = prev_samples / sr
+                    self._transcribe_frames(speech_frames, "you", timestamp)
+                    mic_speech_start = mic_offset
+                    mic_detector.reset()
+
+            # --- Process system audio ---
             sys_frames = self.audio_recorder._system_frames
             sys_len = len(sys_frames)
-            if sys_len > self._system_offset:
-                new_frames = sys_frames[self._system_offset:sys_len]
-                prev_samples = sum(len(f) for f in sys_frames[:self._system_offset])
-                timestamp = prev_samples / self.audio_recorder.sample_rate
-                self._system_offset = sys_len
-                try:
-                    audio = np.concatenate(new_frames)
-                    if len(audio) > 0:
-                        text = self.transcriber.transcribe_text(audio)
-                        if text and text.strip():
-                            self.segment_ready.emit("them", text.strip(), timestamp)
-                except Exception as e:
-                    logger.error(f"System transcription error: {e}")
+            if sys_len > sys_offset:
+                new_frames = sys_frames[sys_offset:sys_len]
+                for frame in new_frames:
+                    sys_detector.feed(frame)
+                sys_offset = sys_len
+
+                speech_frames = sys_frames[sys_speech_start:sys_offset]
+                speech_samples = sum(len(f) for f in speech_frames)
+                speech_duration = speech_samples / sr
+
+                should_transcribe = (
+                    sys_detector.is_silent() and speech_duration > 0.5
+                ) or (
+                    speech_duration >= self.max_speech_s
+                )
+
+                if should_transcribe:
+                    prev_samples = sum(len(f) for f in sys_frames[:sys_speech_start])
+                    timestamp = prev_samples / sr
+                    self._transcribe_frames(speech_frames, "them", timestamp)
+                    sys_speech_start = sys_offset
+                    sys_detector.reset()
+
+        # --- Flush remaining audio when stopping ---
+        mic_remaining = mic_frames[mic_speech_start:mic_offset] if mic_offset > mic_speech_start else []
+        if mic_remaining:
+            prev_samples = sum(len(f) for f in mic_frames[:mic_speech_start])
+            self._transcribe_frames(mic_remaining, "you", prev_samples / sr)
+
+        sys_remaining = sys_frames[sys_speech_start:sys_offset] if sys_offset > sys_speech_start else []
+        if sys_remaining:
+            prev_samples = sum(len(f) for f in sys_frames[:sys_speech_start])
+            self._transcribe_frames(sys_remaining, "them", prev_samples / sr)
 
         logger.info("Transcription worker stopped")
         self.finished.emit()
+
+    def _transcribe_frames(self, frames, speaker, timestamp):
+        """Concatenate frames and transcribe."""
+        try:
+            audio = np.concatenate(frames)
+            if len(audio) > 0:
+                text = self.transcriber.transcribe_text(audio)
+                if text and text.strip():
+                    self.segment_ready.emit(speaker, text.strip(), timestamp)
+        except Exception as e:
+            logger.error(f"Transcription error ({speaker}): {e}")
 
     def stop(self):
         self._running = False
@@ -196,7 +253,9 @@ class CadenceApp(QObject):
         self._transcription_worker = TranscriptionWorker(
             self.streaming_transcriber,
             self.audio_recorder,
-            interval=self.config.get_transcription_interval(),
+            silence_threshold=0.01,
+            min_silence_ms=500,
+            max_speech_s=30.0,
         )
         self._transcription_worker.moveToThread(self._transcription_thread)
 
