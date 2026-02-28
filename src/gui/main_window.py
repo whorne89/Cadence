@@ -42,68 +42,84 @@ class MainWindow(QMainWindow):
         central = QWidget()
         self.setCentralWidget(central)
         layout = QVBoxLayout(central)
-        layout.setContentsMargins(4, 4, 4, 4)
+        layout.setContentsMargins(2, 0, 2, 2)
+        layout.setSpacing(0)
 
-        # Compact header: [BADGE] 00:00:00 · 0 words
-        header = QHBoxLayout()
-        header.setContentsMargins(2, 2, 2, 2)
-        header.setSpacing(8)
+        # Top bar: sidebar toggle | [BADGE] 00:00:00 · 0 words
+        top_bar = QHBoxLayout()
+        top_bar.setContentsMargins(2, 1, 4, 1)
+        top_bar.setSpacing(6)
+
+        self.sidebar_btn = QPushButton("\u2630")  # hamburger icon
+        self.sidebar_btn.setFixedSize(24, 20)
+        self.sidebar_btn.setToolTip("Toggle sidebar")
+        self.sidebar_btn.setStyleSheet("border: none; font-size: 12px; color: #888;")
+        self.sidebar_btn.clicked.connect(self._toggle_sidebar)
+        top_bar.addWidget(self.sidebar_btn)
 
         self.status_label = QLabel("READY")
-        self.status_label.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
+        self.status_label.setFont(QFont("Segoe UI", 8, QFont.Weight.Bold))
         self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.status_label.setFixedHeight(22)
+        self.status_label.setFixedHeight(18)
         self._set_status_badge("idle")
-        header.addWidget(self.status_label)
+        top_bar.addWidget(self.status_label)
 
         self.timer_label = QLabel("00:00:00")
-        self.timer_label.setFont(QFont("Consolas", 11))
-        header.addWidget(self.timer_label)
+        self.timer_label.setFont(QFont("Consolas", 9))
+        top_bar.addWidget(self.timer_label)
 
         sep = QLabel("\u00b7")
         sep.setStyleSheet("color: #888;")
-        header.addWidget(sep)
+        top_bar.addWidget(sep)
 
         self.info_label = QLabel("0 words")
-        self.info_label.setFont(QFont("Segoe UI", 9))
+        self.info_label.setFont(QFont("Segoe UI", 8))
         self.info_label.setStyleSheet("color: #888;")
-        header.addWidget(self.info_label)
+        top_bar.addWidget(self.info_label)
 
-        header.addStretch()
-        layout.addLayout(header)
+        top_bar.addStretch()
+        layout.addLayout(top_bar)
 
         # 3-panel splitter
         self.splitter = QSplitter(Qt.Orientation.Horizontal)
+        self._sidebar_visible = True
 
         # Left panel - Folder tree
-        left_panel = QWidget()
-        left_layout = QVBoxLayout(left_panel)
+        self.left_panel = QWidget()
+        left_layout = QVBoxLayout(self.left_panel)
         left_layout.setContentsMargins(0, 0, 0, 0)
-        left_layout.setSpacing(2)
+        left_layout.setSpacing(0)
+        folder_header = QHBoxLayout()
+        folder_header.setContentsMargins(2, 0, 2, 0)
         folder_label = QLabel("Folders")
         folder_label.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
-        left_layout.addWidget(folder_label)
+        folder_header.addWidget(folder_label)
+        folder_header.addStretch()
+        self.add_folder_btn = QPushButton("+")
+        self.add_folder_btn.setFixedSize(20, 18)
+        self.add_folder_btn.setToolTip("New Folder")
+        self.add_folder_btn.setStyleSheet("border: none; font-size: 14px; font-weight: bold;")
+        self.add_folder_btn.clicked.connect(self._on_add_folder)
+        folder_header.addWidget(self.add_folder_btn)
+        left_layout.addLayout(folder_header)
         self.folder_tree = QTreeWidget()
         self.folder_tree.setHeaderHidden(True)
         self.folder_tree.setFont(QFont("Segoe UI", 9))
+        self.folder_tree.setIndentation(12)
         self.folder_tree.itemClicked.connect(self._on_folder_clicked)
         self.folder_tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.folder_tree.customContextMenuRequested.connect(self._on_folder_context_menu)
         left_layout.addWidget(self.folder_tree)
-        self.add_folder_btn = QPushButton("+")
-        self.add_folder_btn.setFixedHeight(24)
-        self.add_folder_btn.setToolTip("New Folder")
-        self.add_folder_btn.clicked.connect(self._on_add_folder)
-        left_layout.addWidget(self.add_folder_btn)
-        self.splitter.addWidget(left_panel)
+        self.splitter.addWidget(self.left_panel)
 
         # Middle panel - Transcript list
-        mid_panel = QWidget()
-        mid_layout = QVBoxLayout(mid_panel)
+        self.mid_panel = QWidget()
+        mid_layout = QVBoxLayout(self.mid_panel)
         mid_layout.setContentsMargins(0, 0, 0, 0)
-        mid_layout.setSpacing(2)
+        mid_layout.setSpacing(0)
         transcript_label = QLabel("Transcripts")
         transcript_label.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
+        transcript_label.setContentsMargins(2, 0, 2, 0)
         mid_layout.addWidget(transcript_label)
         self.transcript_list = QListWidget()
         self.transcript_list.setFont(QFont("Segoe UI", 9))
@@ -111,7 +127,7 @@ class MainWindow(QMainWindow):
         self.transcript_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.transcript_list.customContextMenuRequested.connect(self._on_transcript_context_menu)
         mid_layout.addWidget(self.transcript_list)
-        self.splitter.addWidget(mid_panel)
+        self.splitter.addWidget(self.mid_panel)
 
         # Right panel - Transcript viewer
         right_panel = QWidget()
@@ -123,32 +139,33 @@ class MainWindow(QMainWindow):
         right_layout.addWidget(self.transcript_area)
         self.splitter.addWidget(right_panel)
 
-        # Collapsible side panels, transcript viewer gets priority
-        self.splitter.setCollapsible(0, True)   # folders
-        self.splitter.setCollapsible(1, True)   # transcripts
-        self.splitter.setCollapsible(2, False)  # viewer
-        self.splitter.setSizes([140, 140, 520])
+        self.splitter.setCollapsible(0, False)
+        self.splitter.setCollapsible(1, False)
+        self.splitter.setCollapsible(2, False)
+        self.splitter.setSizes([130, 130, 540])
+        self.splitter.setHandleWidth(2)
         layout.addWidget(self.splitter)
 
         # Bottom controls
         controls = QHBoxLayout()
+        controls.setContentsMargins(0, 2, 0, 0)
         self.record_btn = QPushButton("Start Recording")
-        self.record_btn.setMinimumHeight(40)
-        self.record_btn.setFont(QFont("Segoe UI", 11))
+        self.record_btn.setMinimumHeight(32)
+        self.record_btn.setFont(QFont("Segoe UI", 10))
         self.record_btn.clicked.connect(self._on_record_clicked)
         controls.addWidget(self.record_btn)
 
         controls.addStretch()
 
         self.clear_btn = QPushButton("Clear")
-        self.clear_btn.setMinimumHeight(40)
-        self.clear_btn.setFont(QFont("Segoe UI", 11))
+        self.clear_btn.setMinimumHeight(32)
+        self.clear_btn.setFont(QFont("Segoe UI", 10))
         self.clear_btn.clicked.connect(self._on_clear)
         controls.addWidget(self.clear_btn)
 
         self.copy_btn = QPushButton("Copy")
-        self.copy_btn.setMinimumHeight(40)
-        self.copy_btn.setFont(QFont("Segoe UI", 11))
+        self.copy_btn.setMinimumHeight(32)
+        self.copy_btn.setFont(QFont("Segoe UI", 10))
         self.copy_btn.clicked.connect(self._on_copy)
         controls.addWidget(self.copy_btn)
 
@@ -157,6 +174,14 @@ class MainWindow(QMainWindow):
     def _setup_timer(self):
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._update_timer)
+
+    # --- Sidebar toggle ---
+
+    def _toggle_sidebar(self):
+        self._sidebar_visible = not self._sidebar_visible
+        self.left_panel.setVisible(self._sidebar_visible)
+        self.mid_panel.setVisible(self._sidebar_visible)
+        self.sidebar_btn.setText("\u2630" if self._sidebar_visible else "\u25b6")
 
     # --- Status badge ---
 
