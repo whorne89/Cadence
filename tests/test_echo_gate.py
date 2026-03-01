@@ -173,6 +173,19 @@ def test_deduplicate_substring_echo():
     assert result[0]["speaker"] == "them"
 
 
+def test_deduplicate_echo_spanning_multiple_sys_segments():
+    """Mic echo that spans multiple shorter system segments."""
+    segments = [
+        {"speaker": "them", "text": "the Pentagon spokesman, Sean Pernell, the day before,", "start": 20.0},
+        {"speaker": "you", "text": "Pernel, the day before, he reiterated their position, we only allow all waffle use.", "start": 22.0},
+        {"speaker": "them", "text": "he reiterated their position,", "start": 23.0},
+        {"speaker": "them", "text": "we only allow all lawful use.", "start": 25.0},
+    ]
+    result = deduplicate_segments(segments)
+    assert len(result) == 3
+    assert all(s["speaker"] == "them" for s in result)
+
+
 def test_deduplicate_empty_segments():
     """Empty segment list should return empty."""
     assert deduplicate_segments([]) == []

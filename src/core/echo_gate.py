@@ -162,15 +162,20 @@ def deduplicate_segments(segments, time_window=8.0, word_overlap_threshold=0.5):
         mic_text = seg["text"]
         mic_start = seg["start"]
 
+        # Collect all nearby system text into one block — mic echo often
+        # spans multiple shorter system segments
+        nearby_sys_texts = []
         for sys_seg in sys_segments:
-            # Check time proximity
-            if abs(mic_start - sys_seg["start"]) > time_window:
-                continue
+            if abs(mic_start - sys_seg["start"]) <= time_window:
+                nearby_sys_texts.append(sys_seg["text"])
 
-            # Word overlap: what fraction of mic words appear in system text
-            overlap = _word_overlap(mic_text, sys_seg["text"])
-            if overlap >= word_overlap_threshold:
-                echo_indices.add(i)
-                break
+        if not nearby_sys_texts:
+            continue
+
+        # Check against combined nearby system text
+        combined_sys = " ".join(nearby_sys_texts)
+        overlap = _word_overlap(mic_text, combined_sys)
+        if overlap >= word_overlap_threshold:
+            echo_indices.add(i)
 
     return [s for i, s in enumerate(segments) if i not in echo_indices]
