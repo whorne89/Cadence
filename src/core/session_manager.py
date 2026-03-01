@@ -67,7 +67,8 @@ class SessionManager:
 
     # --- Transcript operations ---
 
-    def save_transcript(self, segments, duration=0.0, model="base", folder=None, name=None):
+    def save_transcript(self, segments, duration=0.0, model="base", folder=None,
+                        name=None, speaker_name=""):
         """
         Save transcript as a .txt file. Returns the file path.
         Auto-creates a date folder if folder is not specified.
@@ -112,6 +113,8 @@ class SessionManager:
         lines.append(f"Date: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
         lines.append(f"Duration: {dur_str}")
         lines.append(f"Model: {model}")
+        if speaker_name:
+            lines.append(f"Speaker: {speaker_name}")
         lines.append("")
         lines.append("---")
         lines.append("")
@@ -119,7 +122,7 @@ class SessionManager:
             ts = seg.get("start", 0.0)
             mins = int(ts) // 60
             secs = int(ts) % 60
-            speaker = "You" if seg["speaker"] == "you" else "Them"
+            speaker = "You" if seg["speaker"] == "you" else "Speaker"
             lines.append(f"[{mins:02d}:{secs:02d}] {speaker}: {seg['text']}")
 
         filepath.write_text("\n".join(lines), encoding="utf-8")
@@ -140,6 +143,7 @@ class SessionManager:
             "date": "",
             "duration": "",
             "model": "",
+            "speaker_name": "",
             "segments": [],
         }
 
@@ -152,6 +156,8 @@ class SessionManager:
                     result["duration"] = line[9:].strip()
                 elif line.startswith("Model:"):
                     result["model"] = line[6:].strip()
+                elif line.startswith("Speaker:"):
+                    result["speaker_name"] = line[8:].strip()
                 elif line.strip() == "---":
                     in_header = False
                 continue
@@ -160,7 +166,7 @@ class SessionManager:
             if not line:
                 continue
 
-            # Parse "[MM:SS] Speaker: text"
+            # Parse "[MM:SS] Speaker: text" (supports both "Them:" and "Speaker:")
             if line.startswith("[") and "]" in line:
                 bracket_end = line.index("]")
                 ts_str = line[1:bracket_end]
@@ -171,13 +177,16 @@ class SessionManager:
                     start = int(parts[0]) * 60 + int(parts[1])
                 except (ValueError, IndexError):
                     start = 0.0
-                # Parse speaker
+                # Parse speaker — backward compat: "Them:" and "Speaker:" both → "them"
                 if rest.startswith("You:"):
                     speaker = "you"
                     text = rest[4:].strip()
                 elif rest.startswith("Them:"):
                     speaker = "them"
                     text = rest[5:].strip()
+                elif rest.startswith("Speaker:"):
+                    speaker = "them"
+                    text = rest[8:].strip()
                 else:
                     speaker = "unknown"
                     text = rest
@@ -255,6 +264,95 @@ class SessionManager:
             logger.info(f"Transcript moved: {src_folder}/{name} -> {dest_folder}/{name}")
         else:
             logger.warning(f"Cannot move transcript: '{name}' does not exist in '{src_folder}'")
+
+    def update_speaker_name(self, filepath, speaker_name):
+        """Update the Speaker header in a transcript file."""
+        p = Path(filepath)
+        if not p.exists():
+            return
+        content = p.read_text(encoding="utf-8")
+        lines = content.split("\n")
+
+        # Find or insert Speaker header (before the --- separator)
+        new_lines = []
+        found = False
+        for line in lines:
+            if line.startswith("Speaker:"):
+                new_lines.append(f"Speaker: {speaker_name}" if speaker_name else "")
+                found = True
+            elif line.strip() == "---" and not found:
+                if speaker_name:
+                    new_lines.append(f"Speaker: {speaker_name}")
+                new_lines.append(line)
+                found = True
+            else:
+                new_lines.append(line)
+
+        # Remove empty lines that result from clearing speaker name
+        new_lines = [l for l in new_lines if l != ""]
+        # Re-insert blank line before ---
+        final = []
+        for i, line in enumerate(new_lines):
+            if line.strip() == "---" and i > 0 and new_lines[i - 1].strip() != "":
+                final.append("")
+            final.append(line)
+        p.write_text("\n".join(final), encoding="utf-8")
+        logger.info(f"Speaker name updated to '{speaker_name}' in {filepath}")
+
+    def get_metrics(self):
+        """Compute aggregate metrics across all transcripts.
+
+        Returns dict with: total_recordings, total_duration_s, total_words,
+        avg_duration_s, avg_words, recordings_this_week, you_words, speaker_words.
+        """
+        from datetime import timedelta
+        now = datetime.now()
+        week_ago = now - timedelta(days=7)
+
+        total = 0
+        total_duration = 0.0
+        total_words = 0
+        you_words = 0
+        speaker_words = 0
+        this_week = 0
+
+        for folder in self.list_folders():
+            for t in self.list_transcripts(folder, sort_descending=False):
+                total += 1
+                data = self.load_transcript(t["path"])
+
+                # Parse duration "HH:MM:SS"
+                dur = data.get("duration", "")
+                if dur:
+                    try:
+                        parts = dur.split(":")
+                        total_duration += int(parts[0]) * 3600 + int(parts[1]) * 60 + int(parts[2])
+                    except (ValueError, IndexError):
+                        pass
+
+                # Count words per speaker
+                for seg in data["segments"]:
+                    wc = len(seg["text"].split())
+                    total_words += wc
+                    if seg["speaker"] == "you":
+                        you_words += wc
+                    else:
+                        speaker_words += wc
+
+                # Check if recorded this week
+                if t.get("date") and t["date"] >= week_ago:
+                    this_week += 1
+
+        return {
+            "total_recordings": total,
+            "total_duration_s": total_duration,
+            "total_words": total_words,
+            "avg_duration_s": total_duration / total if total else 0.0,
+            "avg_words": total_words // total if total else 0,
+            "recordings_this_week": this_week,
+            "you_words": you_words,
+            "speaker_words": speaker_words,
+        }
 
     def delete_transcript(self, folder, name):
         """Delete a transcript file."""

@@ -2,6 +2,42 @@
 
 All notable changes to Cadence are documented here.
 
+## [2.0.0] - 2026-03-01
+
+### Added
+- Speaker labels: "Speaker" replaces "Them", customizable per-transcript speaker name
+- Your Profile: name field in settings replaces "You" label in transcripts
+- Activity dashboard: 8 metric cards in Settings (recordings, duration, words, weekly stats)
+- Toast notifications: in-app dark pill overlays replace Windows balloon notifications
+- About dialog: rounded themed About page matching app design
+- Themed input dialogs: all input prompts use rounded dark theme (folders, speaker names, moves)
+- Bug report section in settings: pre-filled GitHub issue with system info and recent logs
+- Recording started/completed toast notifications with details (time, duration, word count)
+- Startup toast notification with model info
+
+### Fixed
+- Duplicate microphone devices filtered by name in device list
+- Microphone list now shows only enabled devices (default host API only)
+- Combo box dropdown visual artifact removed
+- Speaker name no longer leaks across transcripts when switching
+- Settings save confirmation only appears when changes are actually made
+
+### Changed
+- Window title simplified to "Cadence" (version removed)
+- Profile field changed from "First name" to "Name" (supports full name)
+
+## [1.0.0] - 2026-02-28
+
+### Added
+- Hybrid post-processing with text-based echo cancellation
+- Two-tier echo gate: energy + text overlap detection for speaker bleed suppression
+- Retroactive echo retraction: removes "you" segments matching later "them" transcriptions
+- Text echo gate with 65% word overlap threshold
+
+### Fixed
+- Widened dedup time window from 8s to 15s for delayed echo
+- Echo gate no longer suppresses user speech over system audio
+
 ## [0.9.0] - 2026-02-28
 
 ### Added

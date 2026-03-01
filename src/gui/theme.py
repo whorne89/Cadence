@@ -3,7 +3,10 @@ Centralized dark theme for Cadence.
 Single source of truth — applied once at startup via apply_theme().
 """
 
-from PySide6.QtWidgets import QApplication, QDialog, QPushButton, QVBoxLayout, QHBoxLayout, QLabel
+from PySide6.QtWidgets import (
+    QApplication, QDialog, QPushButton, QVBoxLayout, QHBoxLayout,
+    QLabel, QLineEdit, QComboBox,
+)
 from PySide6.QtGui import (
     QPalette, QColor, QPainter, QPen, QBrush, QPainterPath,
     QGuiApplication, QRegion, QFont, QPixmap, QIcon,
@@ -81,6 +84,9 @@ QComboBox:hover {{
 }}
 QComboBox::drop-down {{
     border: none;
+    background: transparent;
+    subcontrol-origin: padding;
+    subcontrol-position: center right;
     width: 20px;
 }}
 QComboBox::down-arrow {{
@@ -593,3 +599,101 @@ class MessageBox(RoundedDialog):
         )
         dlg.exec()
         return result[0]
+
+
+class InputBox(RoundedDialog):
+    """Drop-in replacement for QInputDialog using the rounded theme."""
+
+    def __init__(self, title, prompt, text="", parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.setMinimumWidth(350)
+        self._value = ""
+        self._accepted = False
+
+        layout = QVBoxLayout()
+        layout.setSpacing(12)
+
+        lbl = QLabel(prompt)
+        lbl.setWordWrap(True)
+        lbl.setStyleSheet("font-size: 12px;")
+        layout.addWidget(lbl)
+
+        self._edit = QLineEdit()
+        self._edit.setText(text)
+        self._edit.selectAll()
+        layout.addWidget(self._edit)
+
+        btn_layout = QHBoxLayout()
+        btn_layout.addStretch()
+        ok_btn = QPushButton("OK")
+        ok_btn.setFixedWidth(80)
+        ok_btn.clicked.connect(self._on_ok)
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.setFixedWidth(80)
+        cancel_btn.clicked.connect(self.reject)
+        btn_layout.addWidget(ok_btn)
+        btn_layout.addWidget(cancel_btn)
+        layout.addLayout(btn_layout)
+
+        self.setLayout(layout)
+        self._edit.setFocus()
+        self._edit.returnPressed.connect(self._on_ok)
+
+    def _on_ok(self):
+        self._value = self._edit.text()
+        self._accepted = True
+        self.accept()
+
+    @staticmethod
+    def getText(parent, title, prompt, text=""):
+        """Show a themed text input dialog. Returns (text, ok)."""
+        dlg = InputBox(title, prompt, text, parent=parent)
+        dlg.exec()
+        return dlg._value, dlg._accepted
+
+    @staticmethod
+    def getItem(parent, title, prompt, items, current=0, editable=False):
+        """Show a themed combo-box selection dialog. Returns (text, ok)."""
+        dlg = RoundedDialog(parent)
+        dlg.setWindowTitle(title)
+        dlg.setMinimumWidth(350)
+        result = [""]
+        accepted = [False]
+
+        layout = QVBoxLayout()
+        layout.setSpacing(12)
+
+        lbl = QLabel(prompt)
+        lbl.setWordWrap(True)
+        lbl.setStyleSheet("font-size: 12px;")
+        layout.addWidget(lbl)
+
+        combo = QComboBox()
+        combo.addItems(items)
+        if 0 <= current < len(items):
+            combo.setCurrentIndex(current)
+        combo.setEditable(editable)
+        layout.addWidget(combo)
+
+        btn_layout = QHBoxLayout()
+        btn_layout.addStretch()
+
+        def on_ok():
+            result[0] = combo.currentText()
+            accepted[0] = True
+            dlg.accept()
+
+        ok_btn = QPushButton("OK")
+        ok_btn.setFixedWidth(80)
+        ok_btn.clicked.connect(on_ok)
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.setFixedWidth(80)
+        cancel_btn.clicked.connect(dlg.reject)
+        btn_layout.addWidget(ok_btn)
+        btn_layout.addWidget(cancel_btn)
+        layout.addLayout(btn_layout)
+
+        dlg.setLayout(layout)
+        dlg.exec()
+        return result[0], accepted[0]

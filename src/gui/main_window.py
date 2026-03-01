@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QSizeGrip,
     QPushButton, QTextEdit, QLabel, QSplitter,
     QTreeWidget, QTreeWidgetItem, QListWidget, QListWidgetItem,
-    QInputDialog, QMenu,
+    QMenu,
 )
 from PySide6.QtCore import Signal, QTimer, Qt, QPointF, QRectF, QSize
 from PySide6.QtGui import (
@@ -21,7 +21,7 @@ from PySide6.QtGui import (
 from version import __version__
 from gui.theme import (
     BG_PRIMARY, BG_SURFACE, BORDER, ACCENT,
-    TEXT_PRIMARY, TEXT_SECONDARY, MessageBox,
+    TEXT_PRIMARY, TEXT_SECONDARY, MessageBox, InputBox,
 )
 
 TITLE_BAR_HEIGHT = 32
@@ -221,6 +221,7 @@ class MainWindow(QWidget):
     transcript_deleted = Signal(str, str)
     transcript_moved = Signal(str, str, str)
     sort_order_changed = Signal(bool)  # True = descending (newest first)
+    speaker_name_changed = Signal(str, str)  # filepath, new_name
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -236,6 +237,7 @@ class MainWindow(QWidget):
         self._normal_geometry = None
         self._centered = False
         self._sort_descending = True
+        self._current_segments = []
 
         self._setup_ui()
         self._setup_timer()
@@ -285,7 +287,7 @@ class MainWindow(QWidget):
         tb.setContentsMargins(12, 0, 4, 0)
         tb.setSpacing(2)
 
-        title_label = QLabel(f"Cadence v{__version__}")
+        title_label = QLabel("Cadence")
         title_label.setFont(QFont("Calibri", 11, QFont.Weight.Bold))
         tb.addWidget(title_label)
         tb.addStretch()
@@ -423,6 +425,27 @@ class MainWindow(QWidget):
         rp = QWidget()
         rl = QVBoxLayout(rp)
         rl.setContentsMargins(0, 0, 0, 0)
+        rl.setSpacing(0)
+
+        # Speaker name header
+        speaker_row = QHBoxLayout()
+        speaker_row.setContentsMargins(4, 2, 4, 2)
+        self.speaker_name_btn = QPushButton("Speaker (click to name)")
+        self.speaker_name_btn.setFont(QFont("Calibri", 9))
+        self.speaker_name_btn.setToolTip("Click to rename the other speaker")
+        self.speaker_name_btn.setStyleSheet(
+            f"QPushButton {{ background-color:{BG_SURFACE}; border:1px solid {BORDER}; "
+            f"border-radius:4px; color:{TEXT_SECONDARY}; "
+            f"text-align:left; padding:3px 8px; }}"
+            f"QPushButton:hover {{ border-color:{ACCENT}; color:{ACCENT}; }}"
+        )
+        self.speaker_name_btn.clicked.connect(self._on_speaker_name_clicked)
+        speaker_row.addWidget(self.speaker_name_btn)
+        speaker_row.addStretch()
+        rl.addLayout(speaker_row)
+
+        self._current_transcript_path = None
+
         self.transcript_area = QTextEdit()
         self.transcript_area.setReadOnly(True)
         self.transcript_area.setFont(QFont("Calibri", 11))
@@ -604,13 +627,18 @@ class MainWindow(QWidget):
 
     # ── Transcript display ───────────────────────────────────────
 
+    def set_speaker_labels(self, you_label="You", them_label="Speaker"):
+        """Set the display labels for speakers."""
+        self._you_label = you_label
+        self._them_label = them_label
+
     def append_segment(self, speaker, text, timestamp=0.0):
         cursor = self.transcript_area.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.End)
         if speaker == "you":
-            label, color = "You", ACCENT
+            label, color = getattr(self, '_you_label', 'You'), ACCENT
         else:
-            label, color = "Them", "#e74c3c"
+            label, color = getattr(self, '_them_label', 'Speaker'), "#e74c3c"
         mins = int(timestamp) // 60
         secs = int(timestamp) % 60
         ts_str = f"{mins:02d}:{secs:02d}"
@@ -623,6 +651,7 @@ class MainWindow(QWidget):
         self._update_word_count()
 
     def set_transcript(self, segments):
+        self._current_segments = list(segments)
         self.transcript_area.clear()
         for seg in segments:
             self.append_segment(seg["speaker"], seg["text"], seg.get("start", 0.0))
@@ -631,6 +660,38 @@ class MainWindow(QWidget):
         text_content = self.transcript_area.toPlainText()
         word_count = len(text_content.split()) if text_content.strip() else 0
         self.info_label.setText(f"{word_count} words")
+
+    def set_transcript_meta(self, filepath, speaker_name=""):
+        """Set metadata for the currently displayed transcript."""
+        self._current_transcript_path = filepath
+        self.speaker_name_btn.setText(f"Speaker: {speaker_name}" if speaker_name else "Speaker (click to name)")
+        # Set per-transcript them label (reset to default if no name)
+        new_label = speaker_name if speaker_name else "Speaker"
+        if getattr(self, '_them_label', 'Speaker') != new_label:
+            self._them_label = new_label
+            if self._current_segments:
+                self.set_transcript(self._current_segments)
+        else:
+            self._them_label = new_label
+
+    def _on_speaker_name_clicked(self):
+        current = self.speaker_name_btn.text()
+        # Extract existing name from button text
+        if current.startswith("Speaker: "):
+            existing = current[9:]
+        else:
+            existing = ""
+        name, ok = InputBox.getText(
+            self, "Speaker Name", "Name for the other speaker:",
+            text=existing)
+        if ok and self._current_transcript_path:
+            display = name.strip() if name.strip() else ""
+            self.speaker_name_btn.setText(f"Speaker: {display}" if display else "Speaker (click to name)")
+            # Update the "them" label and re-render transcript
+            self._them_label = display if display else "Speaker"
+            if hasattr(self, '_current_segments') and self._current_segments:
+                self.set_transcript(self._current_segments)
+            self.speaker_name_changed.emit(self._current_transcript_path, name.strip())
 
     # ── Clear / Copy ─────────────────────────────────────────────
 
@@ -664,7 +725,7 @@ class MainWindow(QWidget):
         self.folder_selected.emit(folder_name)
 
     def _on_add_folder(self):
-        name, ok = QInputDialog.getText(self, "New Folder", "Folder name:")
+        name, ok = InputBox.getText(self, "New Folder", "Folder name:")
         if ok and name.strip():
             self.folder_created.emit(name.strip())
 
@@ -681,7 +742,7 @@ class MainWindow(QWidget):
 
         action = menu.exec(self.folder_tree.mapToGlobal(pos))
         if action == rename_action:
-            new_name, ok = QInputDialog.getText(
+            new_name, ok = InputBox.getText(
                 self, "Rename Folder", "New name:", text=folder_name)
             if ok and new_name.strip() and new_name.strip() != folder_name:
                 self.folder_renamed.emit(folder_name, new_name.strip())
@@ -731,7 +792,7 @@ class MainWindow(QWidget):
 
         action = menu.exec(self.transcript_list.mapToGlobal(pos))
         if action == rename_action:
-            new_name, ok = QInputDialog.getText(
+            new_name, ok = InputBox.getText(
                 self, "Rename Transcript", "New name:", text=name)
             if ok and new_name.strip() and new_name.strip() != name:
                 self.transcript_renamed.emit(self._current_folder, name, new_name.strip())
@@ -749,7 +810,7 @@ class MainWindow(QWidget):
             if not folders:
                 MessageBox.information(self, "Move", "No other folders available.")
                 return
-            dest, ok = QInputDialog.getItem(
+            dest, ok = InputBox.getItem(
                 self, "Move to Folder", "Destination:", folders, 0, False)
             if ok and dest:
                 self.transcript_moved.emit(self._current_folder, name, dest)

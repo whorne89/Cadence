@@ -467,7 +467,12 @@ class CadenceApp(QObject):
             self.main_window.set_recording_state()
         if self.tray_icon is not None:
             self.tray_icon.set_recording_state()
-            self.tray_icon.show_notification("Recording", "Recording started")
+            from datetime import datetime
+            start_time = datetime.now().strftime("%I:%M %p").lstrip("0")
+            self.tray_icon.show_notification(
+                "Recording", "Recording started",
+                details=f"Started at {start_time}",
+            )
 
     def _start_transcription_worker(self):
         """Launch the transcription worker in a background QThread."""
@@ -611,9 +616,21 @@ class CadenceApp(QObject):
 
         if self.tray_icon is not None:
             self.tray_icon.set_idle_state()
+            dur = int(self._recording_duration)
+            dur_m, dur_s = dur // 60, dur % 60
+            dur_str = f"{dur_m}m {dur_s}s" if dur_m > 0 else f"{dur_s}s"
+            word_count = sum(len(s["text"].split()) for s in segments)
+            seg_count = len(segments)
+            from datetime import datetime
+            end_time = datetime.now().strftime("%I:%M %p").lstrip("0")
             self.tray_icon.show_notification(
-                "Recording Complete",
-                f"Duration: {int(self._recording_duration)}s"
+                "Transcription Complete",
+                "Recording saved",
+                details=(
+                    f"Duration: {dur_str}\n"
+                    f"Segments: {seg_count} | Words: {word_count:,}\n"
+                    f"Finished at {end_time}"
+                ),
             )
 
     def _cleanup_postprocess_thread(self):
@@ -631,7 +648,10 @@ class CadenceApp(QObject):
         """Open the settings dialog."""
         self.logger.info("Opening settings dialog")
         try:
-            dialog = SettingsDialog(self.config, self.audio_recorder, parent=self.main_window)
+            dialog = SettingsDialog(
+                self.config, self.audio_recorder,
+                session_manager=self.session_manager, parent=self.main_window,
+            )
             dialog.settings_changed.connect(self._on_settings_changed)
             dialog.exec()
         except Exception as e:
@@ -653,6 +673,20 @@ class CadenceApp(QObject):
         streaming_model = self.config.get_streaming_model_size()
         if streaming_model != self.streaming_transcriber.model_size:
             self.streaming_transcriber.change_model(streaming_model)
+
+        # Update speaker labels
+        self._apply_speaker_labels()
+
+    def _apply_speaker_labels(self):
+        """Update main window speaker labels from config."""
+        if self.main_window is not None:
+            first_name = self.config.get_first_name()
+            you_label = first_name if first_name else "You"
+            self.main_window.set_speaker_labels(you_label=you_label)
+
+    def _on_speaker_name_changed(self, filepath, name):
+        """Save updated speaker name to transcript file."""
+        self.session_manager.update_speaker_name(filepath, name)
 
     def on_folder_selected(self, folder_name):
         """Load and display transcripts for the selected folder."""
@@ -685,6 +719,8 @@ class CadenceApp(QObject):
                 data = self.session_manager.load_transcript(t["path"])
                 if self.main_window:
                     self.main_window.set_transcript(data["segments"])
+                    self.main_window.set_transcript_meta(
+                        t["path"], data.get("speaker_name", ""))
                 break
 
     def on_transcript_renamed(self, folder, old_name, new_name):
@@ -783,12 +819,26 @@ def main():
     main_window.transcript_moved.connect(cadence_app.on_transcript_moved)
     main_window.sort_order_changed.connect(cadence_app.on_sort_order_changed)
     main_window.settings_requested.connect(cadence_app.show_settings)
+    main_window.speaker_name_changed.connect(cadence_app._on_speaker_name_changed)
+
+    # Apply speaker labels from config
+    cadence_app._apply_speaker_labels()
 
     # Load folders on startup
     cadence_app._refresh_folders()
 
     # Show the main window
     main_window.show()
+
+    # Startup toast
+    model_id = cadence_app.config.get_streaming_model_size()
+    model_names = {"tiny": "Fastest", "base": "Balanced", "small": "Accurate", "medium": "Precision"}
+    model_label = model_names.get(model_id, model_id)
+    tray_icon.show_notification(
+        "Cadence Ready",
+        "Ready to record",
+        details=f"Model: {model_label}",
+    )
 
     # Run the event loop
     sys.exit(app.exec())

@@ -47,7 +47,7 @@ def test_save_transcript_creates_date_folder(sm):
     content = p.read_text()
     assert "Hello" in content
     assert "[00:05] You:" in content
-    assert "[00:12] Them:" in content
+    assert "[00:12] Speaker:" in content
     assert "Duration:" in content
 
 

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cadence"
-version = "1.0.0"
+version = "2.0.0"
 description = "Meeting transcription with real-time speaker attribution"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"

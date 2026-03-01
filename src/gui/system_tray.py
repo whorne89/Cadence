@@ -2,11 +2,12 @@
 System tray interface for Cadence.
 """
 
-from PySide6.QtWidgets import QSystemTrayIcon, QMenu
+from PySide6.QtWidgets import QSystemTrayIcon, QMenu, QVBoxLayout, QHBoxLayout, QLabel, QPushButton
 from PySide6.QtGui import QIcon, QPixmap, QPainter, QColor, QAction
 from PySide6.QtCore import Signal, Qt
 
-from gui.theme import MessageBox
+from gui.toast_notification import ToastNotification
+from gui.theme import RoundedDialog
 from utils.resource_path import get_resource_path
 from pathlib import Path
 
@@ -28,6 +29,7 @@ class SystemTrayIcon(QSystemTrayIcon):
         self._create_menu()
         self.set_idle_state()
         self.setToolTip("Cadence - Meeting Transcription")
+        self._toast = ToastNotification()
         self.activated.connect(self._on_activated)
         self.show()
 
@@ -99,18 +101,80 @@ class SystemTrayIcon(QSystemTrayIcon):
         self.setToolTip("Cadence - Processing...")
         self.action_toggle.setText("Processing...")
 
-    def show_notification(self, title, message, icon_type=QSystemTrayIcon.MessageIcon.Information, duration=3000):
-        self.showMessage(title, message, icon_type, duration)
+    def showMessage(self, *args, **kwargs):
+        """Override Qt native notification — redirect to custom toast."""
+        if len(args) >= 2:
+            self._toast.show_toast(args[1])
+        elif len(args) >= 1:
+            self._toast.show_toast(args[0])
+
+    def show_notification(self, title, message, icon_type=None, duration=3000, details=""):
+        """Show a toast notification overlay."""
+        self._toast.show_toast(message, details=details)
 
     def show_error(self, message):
-        self.show_notification("Error", message, QSystemTrayIcon.MessageIcon.Critical, 5000)
+        self._toast.show_toast(message)
 
     def _show_about(self):
+        dialog = AboutDialog()
+        dialog.exec()
+
+
+class AboutDialog(RoundedDialog):
+    """Custom rounded About dialog for Cadence."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("About Cadence")
+        self.setFixedWidth(380)
+
         from version import __version__
-        MessageBox.information(
-            None, "About Cadence",
-            f"Cadence v{__version__}\n\n"
-            f"Real-time meeting transcription with speaker attribution.\n"
-            f"Records mic + system audio, transcribes locally with Whisper.\n\n"
-            f"Created by William Horne"
+
+        layout = QVBoxLayout()
+        layout.setSpacing(12)
+
+        title = QLabel("Cadence")
+        title.setStyleSheet("font-size: 28px; font-weight: bold;")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(title)
+
+        subtitle = QLabel("Meeting Transcription")
+        subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        subtitle.setStyleSheet("font-size: 13px; color: rgba(255, 255, 255, 160);")
+        layout.addWidget(subtitle)
+
+        layout.addSpacing(4)
+
+        desc = QLabel(
+            "Real-time meeting transcription with speaker attribution\n"
+            "powered by Whisper AI.\n\n"
+            "Records mic + system audio, transcribes locally,\n"
+            "and separates speakers automatically.\n\n"
+            "No internet required \u2014 completely private and secure."
         )
+        desc.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        desc.setStyleSheet("color: rgba(255, 255, 255, 180); line-height: 1.3;")
+        layout.addWidget(desc)
+
+        author = QLabel("Created by William Horne")
+        author.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        author.setStyleSheet("color: rgba(255, 255, 255, 140);")
+        layout.addWidget(author)
+
+        version = QLabel(f"Version {__version__}")
+        version.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        version.setStyleSheet("color: rgba(255, 255, 255, 140);")
+        layout.addWidget(version)
+
+        layout.addSpacing(4)
+
+        btn_layout = QHBoxLayout()
+        btn_layout.addStretch()
+        ok_btn = QPushButton("OK")
+        ok_btn.setFixedWidth(80)
+        ok_btn.clicked.connect(self.accept)
+        btn_layout.addWidget(ok_btn)
+        btn_layout.addStretch()
+        layout.addLayout(btn_layout)
+
+        self.setLayout(layout)

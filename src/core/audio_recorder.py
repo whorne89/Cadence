@@ -48,13 +48,23 @@ class AudioRecorder:
         self._system_device = None
 
     def list_mic_devices(self):
-        """List available microphone input devices."""
+        """List available microphone input devices from the default host API only."""
         devices = []
+        seen_names = set()
+        try:
+            default_api = sd.query_hostapis(0)
+            default_api_index = 0
+        except Exception:
+            default_api_index = 0
         for i, dev in enumerate(sd.query_devices()):
-            if dev['max_input_channels'] > 0:
+            if dev['max_input_channels'] > 0 and dev['hostapi'] == default_api_index:
+                name = dev['name']
+                if name in seen_names:
+                    continue
+                seen_names.add(name)
                 devices.append({
                     'index': i,
-                    'name': dev['name'],
+                    'name': name,
                     'channels': dev['max_input_channels'],
                     'sample_rate': int(dev['default_samplerate']),
                 })

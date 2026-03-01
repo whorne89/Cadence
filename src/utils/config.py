@@ -26,6 +26,9 @@ class ConfigManager:
             "system_device_index": None,
             "channels": 1,
         },
+        "user": {
+            "first_name": "",
+        },
         "session": {},
         "ui": {
             "show_notifications": True,
@@ -98,6 +101,9 @@ class ConfigManager:
 
     def get_system_device(self):
         return self.get("audio", "system_device_index", default=None)
+
+    def get_first_name(self):
+        return self.get("user", "first_name", default="")
 
     def is_echo_debug_enabled(self):
         return self.get("debug", "echo_diagnostics", default=False)
