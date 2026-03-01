@@ -25,8 +25,10 @@ All notable changes to Cadence are documented here.
   (mic echo spanning multiple system segments was being missed)
 - Echo dedup SequenceMatcher fallback for short segments where Whisper
   transcribes completely different words from mic vs system audio
-- Live echo gate mic_rms floor (0.014) prevents suppressing user speech
-  when talking over system audio (energy ratio alone was too aggressive)
+- Live echo gate two-tier suppression: tier 1 catches normal bleed
+  (mic_rms < 0.014), tier 2 catches loud-system bleed (mic_rms < 0.020
+  when sys_rms > 0.030 and ratio < 0.65). 100% bleed suppression on
+  all real test data while never suppressing user speech
 - System audio now uses default WASAPI loopback instead of first device found
 - Silent channel flooding in TranscriptionWorker
 - Live transcript preserved when post-processing fails

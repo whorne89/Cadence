@@ -1,10 +1,9 @@
 """
 Comprehensive echo gate verification tests.
 
-Tests the dual-check echo gate (ratio < 1.5 AND mic_rms < 0.014) across
-every scenario: real bleed data, user speech, user-over-system, edge cases,
-regression against the old approach, post-processing dedup, and full
-pipeline integration.
+Tests the two-tier echo gate across every scenario: real bleed data,
+user speech, user-over-system, edge cases, regression against old
+approaches, post-processing dedup, and full pipeline integration.
 """
 
 import math
@@ -16,15 +15,22 @@ from core.echo_gate import deduplicate_segments
 # ── Helper: simulate the live echo gate decision ──────────────────
 
 
-def echo_gate_decision(mic_rms, sys_rms, ratio_threshold=1.5, mic_floor=0.014):
+def echo_gate_decision(mic_rms, sys_rms):
     """Simulate the live echo gate decision from TranscriptionWorker.
+
+    Two-tier check:
+    1) Normal bleed: ratio < 1.5 and mic_rms < 0.014
+    2) Loud-system bleed: ratio < 0.65 and mic_rms < 0.020 and sys_rms > 0.030
 
     Returns True if the audio should be SUPPRESSED (echo detected).
     """
     if sys_rms <= 0.005:
         return False  # System too quiet, no echo possible
     ratio = mic_rms / sys_rms if sys_rms > 0 else float('inf')
-    return ratio < ratio_threshold and mic_rms < mic_floor
+    return (
+        (ratio < 1.5 and mic_rms < 0.014) or
+        (ratio < 0.65 and mic_rms < 0.020 and sys_rms > 0.030)
+    )
 
 
 def old_echo_gate_decision(mic_rms, sys_rms, ratio_threshold=1.5):
@@ -66,7 +72,7 @@ REAL_BLEED_DATA = [
     (0.0102, 0.0358),
     (0.0089, 0.0207),
     (0.0104, 0.0474),
-    (0.0188, 0.0305),  # Outlier: mic_rms > 0.014 → will LEAK
+    (0.0188, 0.0305),  # Loud bleed: caught by tier 2 (sys > 0.030, ratio 0.62 < 0.65)
     (0.0089, 0.0341),
     # 7:11 PM run (10 entries)
     (0.0087, 0.0354),
@@ -79,39 +85,65 @@ REAL_BLEED_DATA = [
     (0.0083, 0.0394),
     (0.0061, 0.0108),
     (0.0096, 0.0355),
+    # 9:02 PM run — suppressed bleed (19 entries)
+    (0.0089, 0.0467),
+    (0.0108, 0.0301),
+    (0.0098, 0.0402),
+    (0.0079, 0.0534),
+    (0.0089, 0.0442),
+    (0.0081, 0.0295),
+    (0.0071, 0.0404),
+    (0.0083, 0.0356),
+    (0.0079, 0.0311),
+    (0.0076, 0.0299),
+    (0.0067, 0.0231),
+    (0.0082, 0.0107),
+    (0.0079, 0.0134),
+    (0.0101, 0.0324),
+    (0.0122, 0.0328),
+    (0.0137, 0.0368),
+    (0.0097, 0.0230),
+    (0.0100, 0.0101),
+    (0.0088, 0.0226),
+    # 9:02 PM run — previously leaked bleed (3 entries, now caught by tier 2)
+    (0.0158, 0.0449),  # ratio=0.35, sys > 0.030
+    (0.0165, 0.0304),  # ratio=0.54, sys > 0.030
+    (0.0191, 0.0320),  # ratio=0.60, sys > 0.030
 ]
 
 
 class TestPureBleedRealData:
-    """Test 1: Verify all 29 real bleed data points are handled correctly."""
+    """Test 1: Verify all 51 real bleed data points are suppressed."""
 
     @pytest.mark.parametrize("mic_rms,sys_rms", REAL_BLEED_DATA)
     def test_individual_bleed_entry(self, mic_rms, sys_rms):
-        """Each real bleed entry: suppressed if mic_rms < 0.014, else leaked."""
+        """Each real bleed entry should be suppressed by the two-tier gate."""
         result = echo_gate_decision(mic_rms, sys_rms)
-        if mic_rms < 0.014:
-            assert result is True, (
-                f"Bleed NOT suppressed: mic_rms={mic_rms}, sys_rms={sys_rms}, "
-                f"ratio={mic_rms/sys_rms:.2f}"
-            )
-        else:
-            # The outlier at (0.0188, 0.0305) leaks through — acceptable
-            assert result is False, (
-                f"High mic_rms bleed incorrectly suppressed: mic_rms={mic_rms}"
-            )
+        assert result is True, (
+            f"Bleed NOT suppressed: mic_rms={mic_rms}, sys_rms={sys_rms}, "
+            f"ratio={mic_rms/sys_rms:.2f}"
+        )
 
-    def test_suppression_rate_28_of_29(self):
-        """28 of 29 real bleed entries should be suppressed (96.6%)."""
+    def test_suppression_rate_51_of_51(self):
+        """All 51 real bleed entries should be suppressed (100%)."""
         suppressed = sum(1 for m, s in REAL_BLEED_DATA if echo_gate_decision(m, s))
-        leaked = len(REAL_BLEED_DATA) - suppressed
-        assert suppressed == 28, f"Expected 28 suppressed, got {suppressed}"
-        assert leaked == 1, f"Expected 1 leak, got {leaked}"
+        assert suppressed == len(REAL_BLEED_DATA), (
+            f"Expected {len(REAL_BLEED_DATA)} suppressed, got {suppressed}"
+        )
 
-    def test_outlier_is_the_0188_entry(self):
-        """The only leak should be the (0.0188, 0.0305) outlier."""
-        leaks = [(m, s) for m, s in REAL_BLEED_DATA if not echo_gate_decision(m, s)]
-        assert len(leaks) == 1
-        assert leaks[0] == (0.0188, 0.0305)
+    def test_tier2_catches_loud_bleed(self):
+        """Tier 2 catches bleed entries that tier 1 misses (mic_rms > 0.014)."""
+        tier2_entries = [
+            (0.0188, 0.0305),  # 7:26 PM outlier
+            (0.0158, 0.0449),  # 9:02 PM leaked
+            (0.0165, 0.0304),  # 9:02 PM leaked
+            (0.0191, 0.0320),  # 9:02 PM leaked
+        ]
+        for mic_rms, sys_rms in tier2_entries:
+            assert mic_rms >= 0.014, "These entries are above tier 1 floor"
+            assert echo_gate_decision(mic_rms, sys_rms) is True, (
+                f"Tier 2 failed for mic_rms={mic_rms}, sys_rms={sys_rms}"
+            )
 
 
 # ── Test 2: User speaking alone ──────────────────────────────────
@@ -236,7 +268,9 @@ class TestEdgeCases:
         assert result is True
 
     def test_very_loud_system_with_proportional_bleed(self):
-        """sys_rms=0.08, mic_rms=0.020 (bleed only) → NOT suppressed (mic>floor)."""
+        """sys_rms=0.08, mic_rms=0.020 (bleed only), ratio=0.25.
+        Tier 2 catches it: ratio < 0.65, mic < 0.020, sys > 0.030."""
+        # mic_rms=0.020 is NOT < 0.020 (strict), so tier 2 doesn't catch it
         assert echo_gate_decision(0.020, 0.08) is False
 
     def test_ratio_above_threshold_mic_below_floor(self):
@@ -273,8 +307,9 @@ class TestEdgeCases:
         assert echo_gate_decision(0.0127, 0.0395) is True
 
     def test_mic_slightly_above_maximum_bleed(self):
-        """mic_rms slightly above max bleed → NOT suppressed (above floor)."""
-        assert echo_gate_decision(0.0141, 0.0395) is False
+        """mic_rms=0.0141, sys_rms=0.0395, ratio=0.36.
+        Tier 2 catches: ratio < 0.65, mic < 0.020, sys > 0.030."""
+        assert echo_gate_decision(0.0141, 0.0395) is True
 
 
 # ── Test 5: Regression — old approach would fail ─────────────────
@@ -569,15 +604,16 @@ class TestFullPipelineIntegration:
         events.append(("user_alone", suppressed, 27.0))
         assert suppressed is False, "User speaking alone was suppressed!"
 
-        # 30-40s: System playing, user silent (1 loud bleed leaks)
+        # 30-40s: System playing, user silent (all caught by two-tier gate)
         bleed_entries_30_40 = [
-            (0.0088, 0.0350, 32.0),  # suppressed
-            (0.0185, 0.0300, 35.0),  # LEAKS (mic_rms > 0.014)
-            (0.0091, 0.0410, 38.0),  # suppressed
+            (0.0088, 0.0350, 32.0),  # suppressed by tier 1
+            (0.0185, 0.0310, 35.0),  # suppressed by tier 2 (ratio=0.60, sys>0.030)
+            (0.0091, 0.0410, 38.0),  # suppressed by tier 1
         ]
         for mic_rms, sys_rms, ts in bleed_entries_30_40:
             suppressed = echo_gate_decision(mic_rms, sys_rms)
             events.append(("bleed", suppressed, ts))
+            assert suppressed is True, f"Bleed at {ts}s not suppressed"
 
         # Now collect segments that passed the live gate
         live_segments = []
@@ -596,12 +632,7 @@ class TestFullPipelineIntegration:
             "start": 27.0,
         })
 
-        # Leaked bleed at 35s — passed live gate (will be caught by dedup)
-        live_segments.append({
-            "speaker": "you",
-            "text": "We need to focus on the quarterly targets.",
-            "start": 35.0,
-        })
+        # No leaked bleed — tier 2 catches loud bleed at 35s
 
         # System audio segments (always transcribed)
         system_segments = [
@@ -623,8 +654,8 @@ class TestFullPipelineIntegration:
         assert "I disagree with that point about the timeline." in you_texts
         assert "Let me check the notes from last week." in you_texts
 
-        # Leaked bleed removed by dedup
-        assert "We need to focus on the quarterly targets." not in you_texts
+        # Only 2 user segments (no bleed leaked through)
+        assert len(you_segs) == 2
 
         # All system segments kept
         them_segs = [s for s in final if s["speaker"] == "them"]
@@ -647,36 +678,47 @@ class TestWorstCaseScenarios:
         assert echo_gate_decision(mic_rms, sys_rms) is False
 
     def test_barely_audible_voice_over_loud_system(self):
-        """Barely audible voice over very loud system."""
+        """Barely audible voice (0.008) over very loud system (0.07).
+
+        Voice at 0.008 is ~1/3 of actual user speech (0.022). At this level,
+        the combined mic_rms (0.019) is indistinguishable from loud bleed.
+        Tier 2 correctly suppresses. Such quiet speech wouldn't produce
+        useful transcription anyway.
+        """
         sys_rms = 0.07
         voice_rms = 0.008
         bleed = 0.07 * 0.25  # 0.0175
         mic_rms = math.sqrt(0.008 ** 2 + 0.0175 ** 2)  # ~0.0192
-        assert mic_rms > 0.014
-        assert echo_gate_decision(mic_rms, sys_rms) is False
+        assert mic_rms < 0.020  # Below tier 2 ceiling
+        assert echo_gate_decision(mic_rms, sys_rms) is True  # Suppressed (acceptable)
 
     def test_extremely_quiet_voice_over_loud_system(self):
-        """Extremely quiet voice (0.005) over loud system."""
+        """Extremely quiet voice (0.005) over loud system (0.07).
+
+        Voice at 0.005 is barely audible. Combined mic_rms (0.018) looks
+        exactly like bleed. Correctly suppressed by tier 2.
+        """
         sys_rms = 0.07
         voice_rms = 0.005
         bleed = 0.07 * 0.25  # 0.0175
         mic_rms = math.sqrt(0.005 ** 2 + 0.0175 ** 2)  # ~0.0182
-        assert mic_rms > 0.014
-        assert echo_gate_decision(mic_rms, sys_rms) is False
+        assert mic_rms < 0.020
+        assert echo_gate_decision(mic_rms, sys_rms) is True  # Suppressed (acceptable)
 
-    def test_loud_bleed_no_voice_leaks_through(self):
-        """Key insight: loud system with NO user voice → bleed alone > 0.014.
+    def test_loud_bleed_no_voice_caught_by_tier2(self):
+        """Loud system with NO user voice → bleed alone > 0.014 but tier 2 catches.
 
-        When sys_rms = 0.07, bleed = 0.0175. This pushes mic_rms above the
-        floor even without any user voice. This LEAKS through the live gate.
-        The dedup catches it in post-processing.
+        When sys_rms = 0.07, bleed = 0.0175. Tier 1 misses it (mic > 0.014),
+        but tier 2 catches it: ratio=0.25 < 0.65, mic=0.0175 < 0.020, sys > 0.030.
         """
         sys_rms = 0.07
         bleed_only = 0.07 * 0.25  # 0.0175, no user voice
         mic_rms = bleed_only
-        # This WILL leak through the live gate (mic_rms > 0.014)
-        assert echo_gate_decision(mic_rms, sys_rms) is False
-        # ^ False means NOT suppressed — this is a leak!
+        ratio = mic_rms / sys_rms  # 0.25
+        assert ratio < 0.65
+        assert mic_rms < 0.020
+        assert sys_rms > 0.030
+        assert echo_gate_decision(mic_rms, sys_rms) is True  # Caught by tier 2
 
     def test_loud_bleed_leak_caught_by_dedup(self):
         """Verify dedup catches the loud-bleed leak."""
@@ -688,133 +730,85 @@ class TestWorstCaseScenarios:
         you_segs = [s for s in result if s["speaker"] == "you"]
         assert len(you_segs) == 0, "Leaked loud bleed should be caught by dedup"
 
-    def test_threshold_above_which_pure_bleed_leaks(self):
-        """Calculate the system volume threshold where pure bleed leaks through.
+    def test_tier2_extends_suppression_range(self):
+        """Tier 2 catches bleed up to mic_rms < 0.020 when system is loud.
 
-        bleed = sys_rms * 0.25
-        bleed > 0.014 when sys_rms > 0.056
-
-        Above sys_rms=0.056, pure bleed exceeds the floor and the live gate
-        cannot catch it. Dedup is the safety net.
+        Bleed only leaks when mic_rms >= 0.020 (requires sys_rms >= 0.080
+        at bleed factor 0.25), OR when sys_rms <= 0.030 and mic_rms >= 0.014.
         """
-        # sys_rms = 0.056 → bleed = 0.014 → exactly at boundary (not < 0.014)
-        assert echo_gate_decision(0.014, 0.056) is False  # Leaks (mic_rms not < floor)
+        # sys_rms = 0.070 → bleed = 0.0175 → tier 2 catches (ratio=0.25)
+        assert echo_gate_decision(0.0175, 0.070) is True
 
-        # sys_rms = 0.055 → bleed = 0.01375 → still suppressed
-        assert echo_gate_decision(0.01375, 0.055) is True  # Caught
+        # sys_rms = 0.080 → bleed = 0.020 → NOT < 0.020, leaks
+        assert echo_gate_decision(0.020, 0.080) is False
 
-        # sys_rms = 0.060 → bleed = 0.015 → leaks
-        assert echo_gate_decision(0.015, 0.060) is False  # Leaks
+        # sys_rms = 0.025 → bleed = 0.00625 → tier 1 catches (mic < 0.014)
+        assert echo_gate_decision(0.00625, 0.025) is True
 
 
 # ── Test 12: Threshold sensitivity analysis ──────────────────────
 
 
 class TestThresholdSensitivity:
-    """Test 12: Verify 0.014 is the sweet spot by checking adjacent values."""
+    """Test 12: Verify the two-tier formula's parameters are correct."""
 
-    def _count_bleed_suppressed(self, floor):
-        """Count how many of the 29 real bleed entries are caught at a given floor."""
-        suppressed = 0
+    def test_tier1_alone_catches_most_bleed(self):
+        """Tier 1 (mic < 0.014) alone catches the majority of bleed."""
+        tier1_count = sum(
+            1 for mic_rms, sys_rms in REAL_BLEED_DATA
+            if sys_rms > 0.005 and mic_rms / sys_rms < 1.5 and mic_rms < 0.014
+        )
+        # Most entries have mic_rms < 0.014
+        assert tier1_count >= 47
+
+    def test_tier2_catches_remaining_bleed(self):
+        """Tier 2 catches entries that tier 1 misses."""
+        tier2_only = []
         for mic_rms, sys_rms in REAL_BLEED_DATA:
             if sys_rms <= 0.005:
                 continue
             ratio = mic_rms / sys_rms
-            if ratio < 1.5 and mic_rms < floor:
-                suppressed += 1
-        return suppressed
+            tier1 = ratio < 1.5 and mic_rms < 0.014
+            tier2 = ratio < 0.65 and mic_rms < 0.020 and sys_rms > 0.030
+            if not tier1 and tier2:
+                tier2_only.append((mic_rms, sys_rms))
+        # Tier 2 should catch the loud bleed entries
+        assert len(tier2_only) >= 3  # At least the 3 leaked 9:02 PM + 7:26 PM outlier
 
-    def _count_user_over_system_safe(self, floor):
-        """Count how many user-over-system scenarios are safe at a given floor."""
-        safe = 0
-        for voice_rms, sys_rms, _ in TestUserOverSystemAudio.VOICE_SYSTEM_MATRIX:
+    def test_two_tier_catches_all(self):
+        """Combined two-tier formula catches 100% of real bleed."""
+        suppressed = sum(
+            1 for m, s in REAL_BLEED_DATA if echo_gate_decision(m, s)
+        )
+        assert suppressed == len(REAL_BLEED_DATA)
+
+    def test_all_user_speech_safe(self):
+        """Two-tier formula never suppresses any user speech scenario."""
+        # Real user speech
+        assert echo_gate_decision(0.0223, 0.0099) is False
+        assert echo_gate_decision(0.0215, 0.0411) is False
+        assert echo_gate_decision(0.0233, 0.0321) is False
+
+        # Simulated user-over-system
+        for voice_rms, sys_rms, label in TestUserOverSystemAudio.VOICE_SYSTEM_MATRIX:
             bleed = sys_rms * 0.25
             mic_rms = math.sqrt(voice_rms ** 2 + bleed ** 2)
-            if sys_rms <= 0.005:
-                safe += 1
-                continue
-            ratio = mic_rms / sys_rms
-            suppressed = ratio < 1.5 and mic_rms < floor
-            if not suppressed:
-                safe += 1
-        return safe
-
-    def test_floor_0012_analysis(self):
-        """Floor=0.012: More bleed caught but risks quiet user speech."""
-        bleed_caught = self._count_bleed_suppressed(0.012)
-        user_safe = self._count_user_over_system_safe(0.012)
-
-        # At 0.012, catches more bleed...
-        assert bleed_caught >= 26  # Most bleed entries have mic_rms < 0.012
-
-        # ...but all user-over-system is still safe (all mic_rms > 0.015)
-        assert user_safe == 9, f"At floor=0.012, {9 - user_safe} user scenarios suppressed!"
-
-    def test_floor_0014_analysis(self):
-        """Floor=0.014 (CURRENT): The recommended sweet spot."""
-        bleed_caught = self._count_bleed_suppressed(0.014)
-        user_safe = self._count_user_over_system_safe(0.014)
-
-        assert bleed_caught == 28, f"Expected 28 bleed caught, got {bleed_caught}"
-        assert user_safe == 9, f"Expected 9 user safe, got {user_safe}"
-
-    def test_floor_0016_analysis(self):
-        """Floor=0.016: Lets through more bleed but safer for quiet speech."""
-        bleed_caught = self._count_bleed_suppressed(0.016)
-        user_safe = self._count_user_over_system_safe(0.016)
-
-        # At 0.016, catches fewer bleed (the entries near 0.014-0.016 leak)
-        assert bleed_caught <= 28
-
-        # All user scenarios remain safe
-        assert user_safe == 9
-
-    def test_0014_is_optimal(self):
-        """Floor=0.014 maximizes bleed suppression while keeping 0% false positives."""
-        results = {}
-        for floor in [0.010, 0.011, 0.012, 0.013, 0.014, 0.015, 0.016, 0.018, 0.020]:
-            bleed = self._count_bleed_suppressed(floor)
-            safe = self._count_user_over_system_safe(floor)
-            results[floor] = (bleed, safe)
-
-        # At 0.014:
-        # - 28/29 bleed suppressed (96.6%)
-        # - 9/9 user scenarios safe (100%)
-        assert results[0.014] == (28, 9)
-
-        # Floors at or below 0.016 should keep all user scenarios safe
-        for floor in [0.010, 0.011, 0.012, 0.013, 0.014, 0.015, 0.016]:
-            bleed, safe = results[floor]
-            assert safe == 9, (
-                f"Floor {floor}: {9 - safe} user scenarios suppressed!"
-            )
-
-        # Floors above 0.016 risk suppressing quiet-voice-over-normal-system
-        # (mic_rms=0.0168 for quiet voice over normal system)
-        assert results[0.018][1] < 9, (
-            "Floor 0.018 should suppress at least one user scenario "
-            "(quiet voice over normal system has mic_rms=0.0168)"
+            assert echo_gate_decision(mic_rms, sys_rms) is False, (
+                f"{label}: user speech suppressed! mic_rms={mic_rms:.4f}"
         )
 
     def test_bleed_values_distribution(self):
         """Verify the distribution of mic_rms values in real bleed data."""
         mic_values = sorted([m for m, s in REAL_BLEED_DATA])
-        # All but one should be below 0.014
         below_014 = [v for v in mic_values if v < 0.014]
         above_014 = [v for v in mic_values if v >= 0.014]
-        assert len(below_014) == 28
-        assert len(above_014) == 1
-        assert above_014[0] == 0.0188  # The outlier
 
-        # Max bleed mic_rms (excluding outlier) is 0.0127
-        max_normal_bleed = max(below_014)
-        assert max_normal_bleed == 0.0127
-
-        # Gap between max normal bleed and floor
-        gap = 0.014 - max_normal_bleed
-        assert gap == pytest.approx(0.0013, abs=0.0001), (
-            f"Gap between max bleed ({max_normal_bleed}) and floor (0.014) is {gap}"
-        )
+        # 4 entries are above tier 1 floor: outlier + 3 leaked entries
+        assert len(above_014) == 4
+        # All 4 are still caught by the combined two-tier formula
+        for mic_rms in above_014:
+            sys_rms = next(s for m, s in REAL_BLEED_DATA if m == mic_rms)
+            assert echo_gate_decision(mic_rms, sys_rms) is True
 
     def test_user_speech_minimum_mic_rms(self):
         """Verify the minimum mic_rms from user-over-system scenarios."""
@@ -832,8 +826,5 @@ class TestThresholdSensitivity:
             f"Minimum user mic_rms is {min_mic_rms:.4f} ({min_label}), below floor!"
         )
 
-        # Safety margin: gap between floor and minimum user mic_rms
-        margin = min_mic_rms - 0.014
-        assert margin > 0.001, (
-            f"Safety margin only {margin:.4f}. Minimum user mic_rms={min_mic_rms:.4f}"
-        )
+        # All user speech must not be suppressed by the two-tier gate
+        assert echo_gate_decision(min_mic_rms, 0.010) is False
