@@ -71,7 +71,7 @@ class TranscriptionWorker(QObject):
 
         # Per-source silence detectors
         from core.silence_detector import SilenceDetector
-        from core.echo_gate import is_echo, get_audio_for_sample_range
+        from core.echo_gate import get_audio_for_sample_range
         mic_detector = SilenceDetector(self.silence_threshold, self.min_silence_ms, sr)
         sys_detector = SilenceDetector(self.silence_threshold, self.min_silence_ms, sr)
 
@@ -117,7 +117,10 @@ class TranscriptionWorker(QObject):
                     mic_start_sample = sum(len(f) for f in mic_frames[:mic_speech_start])
                     timestamp = mic_start_sample / sr
 
-                    # Echo gate: suppress mic if it's just system audio bleed
+                    # Echo gate: suppress mic if it's just speaker bleed
+                    # Speaker bleed is much quieter than direct speech into mic.
+                    # If system audio is active and mic isn't significantly louder,
+                    # it's just bleed — suppress it.
                     echo_detected = False
                     mic_audio = np.concatenate(speech_frames)
                     mic_end_sample = mic_start_sample + len(mic_audio)
@@ -125,17 +128,19 @@ class TranscriptionWorker(QObject):
                         self.audio_recorder._system_frames,
                         mic_start_sample, mic_end_sample,
                     )
-                    # Only check if system audio has meaningful energy
                     if len(sys_audio) > 0:
                         sys_rms = float(np.sqrt(np.mean(sys_audio.astype(np.float64) ** 2)))
+                        mic_rms = float(np.sqrt(np.mean(mic_audio.astype(np.float64) ** 2)))
                         if sys_rms > 0.005:
-                            echo_detected, corr = is_echo(
-                                mic_audio, sys_audio, detail=True,
-                            )
+                            # User speech into mic is typically 3-10x louder than
+                            # speaker bleed. If mic isn't at least 1.5x the system
+                            # level, it's probably just bleed.
+                            ratio = mic_rms / sys_rms if sys_rms > 0 else float('inf')
+                            echo_detected = ratio < 1.5
                             logger.info(
                                 f"Echo gate at {timestamp:.1f}s: "
-                                f"corr={corr:.3f}, detected={echo_detected}, "
-                                f"sys_rms={sys_rms:.4f}"
+                                f"mic_rms={mic_rms:.4f}, sys_rms={sys_rms:.4f}, "
+                                f"ratio={ratio:.2f}, suppressed={echo_detected}"
                             )
 
                     if echo_detected:
