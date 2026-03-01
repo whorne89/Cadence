@@ -21,6 +21,8 @@ All notable changes to Cadence are documented here.
   produced -0.4 to +0.4 in practice, never detecting echo)
 - Live echo gate was never running due to silence detector reset bug
 - Echo dedup switched from SequenceMatcher to word overlap for better accuracy
+- Echo dedup now combines nearby system segments before overlap check
+  (mic echo spanning multiple system segments was being missed)
 - System audio now uses default WASAPI loopback instead of first device found
 - Silent channel flooding in TranscriptionWorker
 - Live transcript preserved when post-processing fails
