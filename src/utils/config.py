@@ -31,6 +31,9 @@ class ConfigManager:
             "show_notifications": True,
             "minimize_to_tray": True,
         },
+        "debug": {
+            "echo_diagnostics": False,
+        },
     }
 
     def __init__(self, config_file=None):
@@ -95,6 +98,9 @@ class ConfigManager:
 
     def get_system_device(self):
         return self.get("audio", "system_device_index", default=None)
+
+    def is_echo_debug_enabled(self):
+        return self.get("debug", "echo_diagnostics", default=False)
 
     def _merge_configs(self, default, loaded):
         """Deep merge loaded config with defaults."""
