@@ -13,7 +13,7 @@ class ConfigManager:
     """Manages application configuration and settings."""
 
     DEFAULT_CONFIG = {
-        "version": "0.1.0",
+        "version": "1.0.0",
         "whisper": {
             "model_size": "base",
             "language": "en",

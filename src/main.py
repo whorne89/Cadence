@@ -265,7 +265,7 @@ class TranscriptionWorker(QObject):
             logger.error(f"Transcription error: {e}")
         return None
 
-    def _is_text_echo(self, mic_text, timestamp, time_window=15.0, overlap_threshold=0.5):
+    def _is_text_echo(self, mic_text, timestamp, time_window=15.0, overlap_threshold=0.65):
         """Check if mic text matches recent 'them' transcriptions (text-level echo gate)."""
         from core.echo_gate import _word_overlap
         for them_time, them_text in self._recent_them:
@@ -278,7 +278,7 @@ class TranscriptionWorker(QObject):
                     return True
         return False
 
-    def _retract_echo_you(self, them_text, them_timestamp, time_window=15.0, overlap_threshold=0.5):
+    def _retract_echo_you(self, them_text, them_timestamp, time_window=15.0, overlap_threshold=0.65):
         """Retroactively retract 'you' segments that match newly transcribed 'them' text."""
         from core.echo_gate import _word_overlap
         surviving = []
