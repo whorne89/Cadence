@@ -10,14 +10,15 @@ def test_postprocess_worker_emits_segments():
 
     transcriber = MagicMock()
     # Different text per channel so echo dedup doesn't remove them
+    # Mic segments need >= 6 words to avoid SequenceMatcher fallback
     transcriber.transcribe.side_effect = [
         [
-            {"text": "I said hello.", "start": 0.0, "end": 1.5},
-            {"text": "Yes I agree.", "start": 2.0, "end": 3.2},
+            {"text": "I talked about the quarterly budget review yesterday.", "start": 0.0, "end": 1.5},
+            {"text": "We should definitely consider expanding our marketing efforts.", "start": 2.0, "end": 3.2},
         ],
         [
-            {"text": "Hi there.", "start": 0.5, "end": 1.8},
-            {"text": "Let's do it.", "start": 3.0, "end": 4.0},
+            {"text": "The weather forecast calls for rain tomorrow afternoon.", "start": 0.5, "end": 1.8},
+            {"text": "Please remember to submit your timesheets by Friday.", "start": 3.0, "end": 4.0},
         ],
     ]
 

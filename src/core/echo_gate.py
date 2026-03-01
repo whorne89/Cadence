@@ -4,13 +4,15 @@ Echo detection for cross-talk suppression.
 When using speakers, the mic picks up system audio (echo). This module
 provides tools to detect and suppress this cross-talk:
 
-1. Audio-level: Energy envelope correlation between mic and system audio
-   to detect echo during live transcription. Room acoustics distort the
-   raw waveform, but the loudness envelope is preserved.
-2. Text-level: Duplicate segment removal during post-processing.
+1. Audio-level: Energy ratio between mic and system audio to detect
+   echo during live transcription (speaker bleed is quieter than
+   direct speech).
+2. Text-level: Duplicate segment removal during post-processing using
+   word overlap + sequence matching fallback.
 """
 
 import numpy as np
+from difflib import SequenceMatcher
 
 
 def _energy_envelope(audio, window_ms=20, sample_rate=16000):
@@ -129,19 +131,24 @@ def _word_overlap(mic_text, sys_text):
     return len(mic_words & sys_words) / len(mic_words)
 
 
-def deduplicate_segments(segments, time_window=8.0, word_overlap_threshold=0.5):
+def deduplicate_segments(segments, time_window=8.0, word_overlap_threshold=0.5,
+                         seq_match_threshold=0.4):
     """
     Remove mic segments that are echo of system audio segments.
 
-    Uses word overlap rather than sequence matching — if most words in
-    a mic segment also appear in a nearby system segment, it's echo.
-    This is robust to Whisper transcribing the same speech slightly
-    differently from mic vs loopback.
+    Two-pass detection:
+    1. Word overlap: fraction of mic words found in combined nearby system
+       text. Catches most echo even when Whisper chunks differently.
+    2. Sequence matching fallback: character-level similarity against each
+       individual system segment. Catches echo where Whisper produces
+       completely different words (e.g. "prepared to access" vs
+       "prepare to exist").
 
     Args:
         segments: List of {"speaker", "text", "start"} dicts, sorted by start time
         time_window: Max time difference (seconds) to consider as potential echo
         word_overlap_threshold: Fraction of mic words found in system text (0-1)
+        seq_match_threshold: SequenceMatcher ratio above which echo is detected
 
     Returns:
         Filtered list with echo duplicates removed
@@ -162,20 +169,32 @@ def deduplicate_segments(segments, time_window=8.0, word_overlap_threshold=0.5):
         mic_text = seg["text"]
         mic_start = seg["start"]
 
-        # Collect all nearby system text into one block — mic echo often
-        # spans multiple shorter system segments
-        nearby_sys_texts = []
-        for sys_seg in sys_segments:
-            if abs(mic_start - sys_seg["start"]) <= time_window:
-                nearby_sys_texts.append(sys_seg["text"])
-
-        if not nearby_sys_texts:
+        # Collect nearby system segments
+        nearby = [s for s in sys_segments
+                  if abs(mic_start - s["start"]) <= time_window]
+        if not nearby:
             continue
 
-        # Check against combined nearby system text
-        combined_sys = " ".join(nearby_sys_texts)
+        # Pass 1: Word overlap against combined nearby system text
+        combined_sys = " ".join(s["text"] for s in nearby)
         overlap = _word_overlap(mic_text, combined_sys)
         if overlap >= word_overlap_threshold:
             echo_indices.add(i)
+            continue
+
+        # Pass 2: Sequence matching for short mic segments.
+        # Catches echo where Whisper transcribes completely different words
+        # from mic vs system (same audio, different text). Only applied to
+        # short segments (< 6 words) where word overlap is unreliable due
+        # to the small word count.
+        mic_words_count = len(mic_text.split())
+        if mic_words_count < 6:
+            mic_lower = mic_text.lower().strip()
+            for sys_seg in nearby:
+                sys_lower = sys_seg["text"].lower().strip()
+                ratio = SequenceMatcher(None, mic_lower, sys_lower).ratio()
+                if ratio >= seq_match_threshold:
+                    echo_indices.add(i)
+                    break
 
     return [s for i, s in enumerate(segments) if i not in echo_indices]

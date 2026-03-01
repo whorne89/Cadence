@@ -23,6 +23,8 @@ All notable changes to Cadence are documented here.
 - Echo dedup switched from SequenceMatcher to word overlap for better accuracy
 - Echo dedup now combines nearby system segments before overlap check
   (mic echo spanning multiple system segments was being missed)
+- Echo dedup SequenceMatcher fallback for short segments where Whisper
+  transcribes completely different words from mic vs system audio
 - System audio now uses default WASAPI loopback instead of first device found
 - Silent channel flooding in TranscriptionWorker
 - Live transcript preserved when post-processing fails
