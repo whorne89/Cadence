@@ -17,6 +17,8 @@ All notable changes to Cadence are documented here.
 - Auto-detect option for mic and system audio devices
 
 ### Fixed
+- Live echo gate replaced with energy ratio approach (envelope correlation
+  produced -0.4 to +0.4 in practice, never detecting echo)
 - Live echo gate was never running due to silence detector reset bug
 - Echo dedup switched from SequenceMatcher to word overlap for better accuracy
 - System audio now uses default WASAPI loopback instead of first device found
