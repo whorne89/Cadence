@@ -132,11 +132,12 @@ class TranscriptionWorker(QObject):
                         sys_rms = float(np.sqrt(np.mean(sys_audio.astype(np.float64) ** 2)))
                         mic_rms = float(np.sqrt(np.mean(mic_audio.astype(np.float64) ** 2)))
                         if sys_rms > 0.005:
-                            # User speech into mic is typically 3-10x louder than
-                            # speaker bleed. If mic isn't at least 1.5x the system
-                            # level, it's probably just bleed.
+                            # Dual check: ratio detects bleed pattern, mic_rms floor
+                            # prevents suppressing user speech. Bleed keeps mic_rms
+                            # below ~0.013; real speech pushes it above 0.014 even
+                            # when speaking over loud system audio.
                             ratio = mic_rms / sys_rms if sys_rms > 0 else float('inf')
-                            echo_detected = ratio < 1.5
+                            echo_detected = ratio < 1.5 and mic_rms < 0.014
                             logger.info(
                                 f"Echo gate at {timestamp:.1f}s: "
                                 f"mic_rms={mic_rms:.4f}, sys_rms={sys_rms:.4f}, "
