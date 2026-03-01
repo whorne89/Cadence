@@ -131,7 +131,7 @@ def _word_overlap(mic_text, sys_text):
     return len(mic_words & sys_words) / len(mic_words)
 
 
-def deduplicate_segments(segments, time_window=8.0, word_overlap_threshold=0.5,
+def deduplicate_segments(segments, time_window=15.0, word_overlap_threshold=0.5,
                          seq_match_threshold=0.4):
     """
     Remove mic segments that are echo of system audio segments.

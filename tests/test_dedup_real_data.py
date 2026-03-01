@@ -126,6 +126,28 @@ def test_genuine_speech_not_removed():
     assert len(result) == 4  # Nothing should be removed
 
 
+def test_923pm_delayed_echo():
+    """9:23 PM - Echo appearing 8+ seconds after system segment."""
+    segments = [
+        {"speaker": "them", "text": "We appreciate you taking the time you are Dario on a day the CEO of Anthropics, all right?", "start": 1.0},
+        {"speaker": "them", "text": "That's correct. Yeah. Well, my first question to you is why won't you release Anthropics AI without restrictions to the US government?", "start": 7.0},
+        {"speaker": "them", "text": "Yeah, so, you know, we should maybe back up a bit for a little bit of context.", "start": 15.0},
+        {"speaker": "you", "text": "to US government?", "start": 15.5},  # Echo of system at 7.0s
+        {"speaker": "them", "text": "So, um, you know, Anthropic actually has been the most lean forward of all the AI companies in", "start": 19.0},
+        {"speaker": "you", "text": "Wow. This is all very interesting.", "start": 38.0},  # Genuine speech
+        {"speaker": "you", "text": "What do you say?", "start": 39.0},  # Genuine speech
+        {"speaker": "you", "text": "It's, wow. It's so interesting.", "start": 48.0},  # Genuine speech
+    ]
+    result = deduplicate_segments(segments)
+    texts = [s["text"] for s in result]
+    # Echo should be removed (even with 8.5s gap)
+    assert "to US government?" not in texts
+    # Genuine speech should be kept
+    assert "Wow. This is all very interesting." in texts
+    assert "What do you say?" in texts
+    assert "It's, wow. It's so interesting." in texts
+
+
 def test_648pm_clean_result():
     """6:48 PM - Already-clean transcript should not lose segments."""
     segments = [
