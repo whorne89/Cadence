@@ -1,13 +1,15 @@
 # -*- mode: python ; coding: utf-8 -*-
+import os
+PROJ_ROOT = os.path.abspath(os.path.join(SPECPATH, '..'))
 
 block_cipher = None
 
 a = Analysis(
-    ['src\\main.py'],
-    pathex=['src'],
+    [os.path.join(PROJ_ROOT, 'src', 'main.py')],
+    pathex=[os.path.join(PROJ_ROOT, 'src')],
     binaries=[],
     datas=[
-        ('src\\resources', 'resources'),
+        (os.path.join(PROJ_ROOT, 'src', 'resources'), 'resources'),
     ],
     hiddenimports=[
         'faster_whisper',
@@ -29,14 +31,18 @@ a = Analysis(
         'soundfile',
         'core.audio_recorder',
         'core.transcriber',
-        'core.streaming_transcriber',
         'core.session_manager',
+        'core.echo_gate',
+        'core.echo_diagnostics',
+        'core.silence_detector',
         'gui.system_tray',
         'gui.main_window',
         'gui.settings_dialog',
+        'gui.theme',
         'utils.config',
         'utils.logger',
         'utils.resource_path',
+        'version',
     ],
     hookspath=[],
     hooksconfig={},
