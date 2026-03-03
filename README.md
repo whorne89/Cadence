@@ -7,46 +7,56 @@ Real-time meeting transcription with speaker attribution. Records both your micr
 - **Real-time transcription** — Live speech-to-text during meetings using faster-whisper (CPU, int8)
 - **Dual audio capture** — Simultaneous mic + system audio (WASAPI loopback) recording
 - **Speaker attribution** — Automatic "You" vs "Speaker" labels with customizable per-transcript speaker names
+- **Multi-layer echo cancellation** — Three-tier live echo gate (energy, envelope correlation, text matching) plus post-processing dedup with clause-level recovery
 - **Post-processing** — Full-audio re-transcription after recording for higher accuracy
-- **Echo cancellation** — Hybrid energy + text-based echo gate suppresses speaker bleed between channels
-- **Activity dashboard** — Session metrics: recordings, duration, word counts, weekly stats
-- **Toast notifications** — In-app dark pill overlays for recording status, startup, and transcription results
+- **Model selection** — Four Whisper model tiers: Fastest (tiny), Balanced (base), Accurate (small), Precision (medium)
 - **Session management** — Organize transcripts in folders with date-sorted history
+- **Activity dashboard** — Session metrics: recordings, duration, word counts, weekly stats
 - **Dark theme UI** — Frameless rounded window with collapsible sidebar and themed dialogs
-- **Bug reporting** — One-click GitHub issue creation with system info and recent logs
 - **System tray** — Minimal footprint with tray icon, runs in background
 
-## Quick Start
+## Install
+
+Download the latest release from the [Releases](https://github.com/whorne89/Cadence/releases) page and run `Cadence.exe`.
+
+## Development
+
+### Requirements
+
+- Python 3.12
+- Windows 10/11 (WASAPI loopback requires Windows)
+- [uv](https://docs.astral.sh/uv/) package manager
+
+### Run from source
 
 ```
 uv sync
 uv run python src/main.py
 ```
 
-## Requirements
+### Test
 
-- Python 3.12
-- Windows 10/11 (WASAPI loopback requires Windows)
+```
+uv run pytest tests/ -v
+```
 
-## Tech Stack
-
-- **UI**: PySide6 (Qt for Python)
-- **Transcription**: faster-whisper (Whisper models: tiny, base, small, medium)
-- **Mic capture**: sounddevice
-- **System audio**: PyAudioWPatch (WASAPI loopback)
-- **Build**: PyInstaller
-
-## Building
+### Build EXE
 
 ```
 scripts\build.bat
 ```
 
-## Testing
+Output goes to `dist/Cadence/`.
 
-```
-uv run pytest tests/ -v
-```
+## Tech Stack
+
+| Layer | Technology |
+|-------|-----------|
+| UI | PySide6 (Qt for Python) |
+| Transcription | faster-whisper (Whisper, CPU, int8) |
+| Mic capture | sounddevice |
+| System audio | PyAudioWPatch (WASAPI loopback) |
+| Build | PyInstaller |
 
 ## License
 
