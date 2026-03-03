@@ -1,6 +1,42 @@
 # Changelog
 
 All notable changes to Cadence are documented here.
+Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/).
+
+## [2.2.0] - 2026-03-03
+
+### Added
+- **Phase 1 — Widened time window:** Echo detection window expanded from 15s to 30s across all three detection layers (deduplicate_segments, _is_text_echo, _retract_echo_you). Catches delayed echo up to 30s apart. Recent segment retention increased from 60s to 90s.
+- **Phase 2 — Audio envelope correlation in live pipeline:** `is_echo()` now runs as tier 3 in the live transcription pipeline (after energy gate, before Whisper). Uses envelope correlation threshold of 0.7 with mic_rms < 0.020 guard to catch echo that Whisper transcribes as different words per channel.
+- **Phase 3 — Prefix/suffix extraction:** New `_extract_prefix_suffix()` function with `ACKNOWLEDGMENT_WORDS` set. When clause splitting can't isolate genuine speech (no punctuation delimiter), scans 1-4 word prefixes/suffixes. Recovers acknowledgments like "Okay", "Sure", "Yes" glued to echo without punctuation.
+- **Phase 4 — SequenceMatcher for medium segments:** Pass 3b in `deduplicate_segments()` applies character-level SequenceMatcher (ratio >= 0.55) to 6-15 word segments. Catches echo where Whisper wording differences reduce word overlap below threshold. Routes through clause recovery before full removal.
+- 20 new tests covering all four phases (261 total, up from 241)
+
+### Changed
+- `deduplicate_segments()` default `time_window`: 15.0 → 30.0
+- `_is_text_echo()` default `time_window`: 15.0 → 30.0
+- `_retract_echo_you()` default `time_window`: 15.0 → 30.0
+- `_recent_them` / `_recent_you` retention cutoff: 60s → 90s
+- `_extract_unique_clauses()` now falls back to prefix/suffix extraction when clause splitting fails
+
+## [2.1.0] - 2026-03-03
+
+### Added
+- **Clause-level echo recovery:** `_extract_unique_clauses()` splits mixed segments on sentence boundaries, checks per-clause word overlap, keeps genuine clauses while removing echoed ones
+- Clause recovery integrated into three detection layers: `deduplicate_segments` (post-processing), `_is_text_echo` (live), `_retract_echo_you` (retroactive)
+- **Debug Settings UI:** Master toggle with sub-options for echo diagnostics and echo gate logging
+- **Echo diagnostics system:** `echo_diagnostics.py` saves WAV files + metadata per audio chunk for offline analysis
+- Conditional echo gate logging behind settings toggle
+- Live settings refresh: `_on_settings_changed` updates diagnostics and logging flags without restart
+- Per-channel silence thresholds — mic: 0.005/400ms/0.3s, sys: 0.01/500ms/0.5s
+- Reverse overlap dedup — catches echo concatenated with real speech (5+ word "them" segments)
+- Language enforcement — `language="en"` on all transcribe calls
+- Hallucination filter — non-English text (character ratio + vocabulary coverage) and filler-only segments
+- Segment merging — `merge_segments()` combines same-speaker segments within 2s gap
+- Comma-based clause splitting fallback for 12+ word single-sentence segments
+
+### Changed
+- Transcription quality overhaul for improved accuracy and echo detection
 
 ## [2.0.0] - 2026-03-01
 

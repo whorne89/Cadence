@@ -221,3 +221,86 @@ def test_word_overlap_different():
         "The weather forecast calls for rain tomorrow",
     )
     assert overlap < 0.3
+
+
+# ── Phase 1 (v3): Widened time window tests ─────────────────────
+
+
+def test_deduplicate_catches_echo_at_25s_delay():
+    """Echo with 25s delay should be caught by widened 30s window."""
+    segments = [
+        {"speaker": "them", "text": "how do you do it then", "start": 5.0},
+        {"speaker": "you", "text": "how do you do it then", "start": 30.0},
+    ]
+    result = deduplicate_segments(segments)
+    you_segs = [s for s in result if s["speaker"] == "you"]
+    assert len(you_segs) == 0, "Echo at 25s delay should be caught"
+
+
+def test_deduplicate_catches_echo_at_28s_delay():
+    """Echo near the edge of the 30s window should still be caught."""
+    segments = [
+        {"speaker": "them", "text": "the quarterly report needs updating before Friday", "start": 2.0},
+        {"speaker": "you", "text": "the quarterly report needs updating before Friday", "start": 30.0},
+    ]
+    result = deduplicate_segments(segments)
+    you_segs = [s for s in result if s["speaker"] == "you"]
+    assert len(you_segs) == 0, "Echo at 28s delay should be caught"
+
+
+def test_deduplicate_genuine_speech_25s_apart_kept():
+    """Genuinely different speech 25s apart should NOT be removed."""
+    segments = [
+        {"speaker": "them", "text": "Let me check the calendar for next week", "start": 5.0},
+        {"speaker": "you", "text": "I think we should focus on the architecture review instead", "start": 30.0},
+    ]
+    result = deduplicate_segments(segments)
+    you_segs = [s for s in result if s["speaker"] == "you"]
+    assert len(you_segs) == 1, "Genuine speech should be kept"
+
+
+def test_deduplicate_explicit_narrow_window_still_works():
+    """Passing explicit time_window=3.0 should still work (no regression)."""
+    segments = [
+        {"speaker": "them", "text": "Hello there", "start": 1.0},
+        {"speaker": "you", "text": "Hello there", "start": 10.0},
+    ]
+    result = deduplicate_segments(segments, time_window=3.0)
+    assert len(result) == 2, "Explicit narrow window should ignore distant segments"
+
+
+# ── Phase 4 (v3): SequenceMatcher medium segment tests ──────────
+
+
+def test_deduplicate_paraphrased_echo_caught():
+    """Medium segment with paraphrased echo (wording differences) should be caught."""
+    segments = [
+        {"speaker": "them", "text": "sure Yes I think we should definitely move forward with the proposal", "start": 2.0},
+        {"speaker": "you", "text": "sure Yes I think we should definitely move forward with that proposal", "start": 3.0},
+    ]
+    result = deduplicate_segments(segments)
+    you_segs = [s for s in result if s["speaker"] == "you"]
+    assert len(you_segs) == 0, "Paraphrased echo should be caught by SequenceMatcher"
+
+
+def test_deduplicate_similar_topic_genuine_kept():
+    """Genuine conversation on same topic should NOT be removed."""
+    segments = [
+        {"speaker": "them", "text": "The quarterly earnings report shows significant growth in cloud revenue", "start": 2.0},
+        {"speaker": "you", "text": "I think we need to focus more on enterprise sales and customer retention", "start": 3.0},
+    ]
+    result = deduplicate_segments(segments)
+    you_segs = [s for s in result if s["speaker"] == "you"]
+    assert len(you_segs) == 1, "Genuine different speech should be kept"
+
+
+def test_deduplicate_medium_echo_with_clause_recovery():
+    """Medium echo with genuine prefix should recover via clause extraction."""
+    segments = [
+        {"speaker": "them", "text": "we should push the timeline back and revisit the compliance requirements", "start": 5.0},
+        {"speaker": "you", "text": "Absolutely. we should push the timeline back and revisit the compliance requirements", "start": 5.5},
+    ]
+    result = deduplicate_segments(segments)
+    you_segs = [s for s in result if s["speaker"] == "you"]
+    assert len(you_segs) == 1
+    assert "absolutely" in you_segs[0]["text"].lower()

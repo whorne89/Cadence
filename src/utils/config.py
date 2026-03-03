@@ -35,7 +35,9 @@ class ConfigManager:
             "minimize_to_tray": True,
         },
         "debug": {
+            "enabled": False,
             "echo_diagnostics": False,
+            "echo_gate_logging": False,
         },
     }
 
@@ -105,8 +107,14 @@ class ConfigManager:
     def get_first_name(self):
         return self.get("user", "first_name", default="")
 
+    def is_debug_enabled(self):
+        return self.get("debug", "enabled", default=False)
+
     def is_echo_debug_enabled(self):
         return self.get("debug", "echo_diagnostics", default=False)
+
+    def is_echo_gate_logging_enabled(self):
+        return self.get("debug", "echo_gate_logging", default=False)
 
     def _merge_configs(self, default, loaded):
         """Deep merge loaded config with defaults."""

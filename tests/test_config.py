@@ -42,3 +42,38 @@ def test_config_get_with_default(tmp_path):
     assert config.get("nonexistent", "key", default="fallback") == "fallback"
 
 
+def test_debug_defaults(tmp_path):
+    """Debug settings should default to False."""
+    from src.utils.config import ConfigManager
+    config = ConfigManager(config_file=tmp_path / "settings.json")
+    assert config.is_debug_enabled() is False
+    assert config.is_echo_debug_enabled() is False
+    assert config.is_echo_gate_logging_enabled() is False
+
+
+def test_debug_persistence(tmp_path):
+    """Debug settings should persist across save/load."""
+    from src.utils.config import ConfigManager
+    config_file = tmp_path / "settings.json"
+    config = ConfigManager(config_file=config_file)
+    config.set("debug", "enabled", value=True)
+    config.set("debug", "echo_diagnostics", value=True)
+    config.set("debug", "echo_gate_logging", value=True)
+    config.save()
+
+    config2 = ConfigManager(config_file=config_file)
+    assert config2.is_debug_enabled() is True
+    assert config2.is_echo_debug_enabled() is True
+    assert config2.is_echo_gate_logging_enabled() is True
+
+
+def test_debug_accessors(tmp_path):
+    """Debug accessor methods should reflect set values."""
+    from src.utils.config import ConfigManager
+    config = ConfigManager(config_file=tmp_path / "settings.json")
+    config.set("debug", "enabled", value=True)
+    assert config.is_debug_enabled() is True
+    config.set("debug", "echo_gate_logging", value=True)
+    assert config.is_echo_gate_logging_enabled() is True
+
+

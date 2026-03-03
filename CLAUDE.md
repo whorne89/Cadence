@@ -19,6 +19,14 @@ System tray app with full window on demand. QThread for async transcription.
 - Signal/slot for cross-thread communication
 - Dual audio: mic (sounddevice) + system (WASAPI loopback via PyAudioWPatch)
 
+## Changelog & Versioning
+- **Always update `CHANGELOG.md`** when making any functional change (features, fixes, refactors).
+- Follow [Keep a Changelog](https://keepachangelog.com/) format: Added, Changed, Fixed, Removed sections.
+- Follow [Semantic Versioning](https://semver.org/): MAJOR.MINOR.PATCH (breaking.feature.fix).
+- Version must be updated in **three places** when bumping: `src/version.py`, `pyproject.toml`, and the new `CHANGELOG.md` entry header.
+- Add changelog entries under an `## [Unreleased]` section during development. When committing/releasing, replace with the version number and date.
+- **Never include benchmark data, test meeting names, participant names, or internal testing details in the changelog.** The changelog is public-facing.
+
 ## Running
 ```
 uv sync

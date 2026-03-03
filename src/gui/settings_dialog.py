@@ -5,6 +5,7 @@ Settings dialog for Cadence.
 from PySide6.QtWidgets import (
     QVBoxLayout, QFormLayout, QHBoxLayout, QGridLayout,
     QComboBox, QGroupBox, QPushButton, QLabel, QLineEdit, QFrame,
+    QCheckBox, QWidget,
 )
 from PySide6.QtCore import Signal, Qt
 from PySide6.QtGui import QFont
@@ -129,6 +130,44 @@ class SettingsDialog(RoundedDialog):
         bug_layout.addLayout(bug_btn_row)
         bug_group.setLayout(bug_layout)
         layout.addWidget(bug_group)
+
+        # Debug
+        debug_group = QGroupBox("Debug")
+        debug_layout = QVBoxLayout()
+        debug_layout.setSpacing(4)
+
+        self.debug_master_cb = QCheckBox("Enable Debug Mode")
+        debug_layout.addWidget(self.debug_master_cb)
+        debug_master_desc = QLabel("Enables advanced diagnostic features for troubleshooting.")
+        debug_master_desc.setStyleSheet("color: rgba(255, 255, 255, 140); font-size: 11px;")
+        debug_layout.addWidget(debug_master_desc)
+
+        # Sub-options container (indented, hidden when master off)
+        self.debug_sub_widget = QWidget()
+        debug_sub_layout = QVBoxLayout()
+        debug_sub_layout.setContentsMargins(20, 4, 0, 0)
+        debug_sub_layout.setSpacing(4)
+
+        self.echo_diag_cb = QCheckBox("Echo Diagnostics")
+        debug_sub_layout.addWidget(self.echo_diag_cb)
+        echo_diag_desc = QLabel("Saves WAV audio chunks to .cadence/echo_debug/ for analysis.")
+        echo_diag_desc.setStyleSheet("color: rgba(255, 255, 255, 140); font-size: 11px;")
+        debug_sub_layout.addWidget(echo_diag_desc)
+
+        self.echo_log_cb = QCheckBox("Echo Gate Logging")
+        debug_sub_layout.addWidget(self.echo_log_cb)
+        echo_log_desc = QLabel("Verbose energy gate logging (mic/sys RMS, ratio, suppression).")
+        echo_log_desc.setStyleSheet("color: rgba(255, 255, 255, 140); font-size: 11px;")
+        debug_sub_layout.addWidget(echo_log_desc)
+
+        self.debug_sub_widget.setLayout(debug_sub_layout)
+        debug_layout.addWidget(self.debug_sub_widget)
+
+        debug_group.setLayout(debug_layout)
+        layout.addWidget(debug_group)
+
+        # Wire master toggle
+        self.debug_master_cb.toggled.connect(self._on_debug_toggled)
 
         # Buttons
         btn_layout = QHBoxLayout()
@@ -268,6 +307,13 @@ class SettingsDialog(RoundedDialog):
         url = f"https://github.com/whorne89/Cadence/issues/new?title={title}&body={encoded_body}"
         webbrowser.open(url)
 
+    def _on_debug_toggled(self, checked):
+        """Show/hide debug sub-options and reset checkboxes when disabled."""
+        self.debug_sub_widget.setVisible(checked)
+        if not checked:
+            self.echo_diag_cb.setChecked(False)
+            self.echo_log_cb.setChecked(False)
+
     def _populate_mic_devices(self):
         self.mic_combo.addItem("Auto-detect", None)
         for dev in self.audio_recorder.list_mic_devices():
@@ -298,6 +344,13 @@ class SettingsDialog(RoundedDialog):
 
         self.name_edit.setText(self.config.get_first_name())
 
+        # Debug settings
+        debug_enabled = self.config.is_debug_enabled()
+        self.debug_master_cb.setChecked(debug_enabled)
+        self.debug_sub_widget.setVisible(debug_enabled)
+        self.echo_diag_cb.setChecked(self.config.is_echo_debug_enabled())
+        self.echo_log_cb.setChecked(self.config.is_echo_gate_logging_enabled())
+
     def _save_settings(self):
         changes = []
 
@@ -320,6 +373,22 @@ class SettingsDialog(RoundedDialog):
         if new_name != self.config.get_first_name():
             changes.append(f"Name: {new_name or '(cleared)'}")
         self.config.set("user", "first_name", value=new_name)
+
+        # Debug settings
+        new_debug = self.debug_master_cb.isChecked()
+        if new_debug != self.config.is_debug_enabled():
+            changes.append(f"Debug Mode: {'On' if new_debug else 'Off'}")
+        self.config.set("debug", "enabled", value=new_debug)
+
+        new_echo_diag = self.echo_diag_cb.isChecked()
+        if new_echo_diag != self.config.is_echo_debug_enabled():
+            changes.append(f"Echo Diagnostics: {'On' if new_echo_diag else 'Off'}")
+        self.config.set("debug", "echo_diagnostics", value=new_echo_diag)
+
+        new_echo_log = self.echo_log_cb.isChecked()
+        if new_echo_log != self.config.is_echo_gate_logging_enabled():
+            changes.append(f"Echo Gate Logging: {'On' if new_echo_log else 'Off'}")
+        self.config.set("debug", "echo_gate_logging", value=new_echo_log)
 
         self.config.save()
         self.settings_changed.emit()
