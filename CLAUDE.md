@@ -42,3 +42,15 @@ uv run pytest tests/ -v
 ```
 scripts\build.bat
 ```
+
+## Releasing a New Version
+When tagging a new version, follow this full release process:
+
+1. **Update version** in all three places: `src/version.py`, `pyproject.toml`, `CHANGELOG.md` header.
+2. **Update `CHANGELOG.md`**: Move `[Unreleased]` entries under the new version header with today's date.
+3. **Commit** the version bump and changelog update.
+4. **Push to main**: `git push origin main`.
+5. **Build the EXE**: Run `scripts\build.bat`. Output goes to `dist/Cadence/`.
+6. **Zip the build**: Create `Cadence-vX.Y.Z-windows.zip` from `dist/Cadence/`.
+7. **Create GitHub release with tag**: Use `gh release create vX.Y.Z` with the changelog notes for that version and attach the zip as a release asset.
+8. **Only tag milestone versions** — not every commit. Tags should correspond to meaningful releases users would download.
