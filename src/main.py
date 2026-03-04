@@ -65,7 +65,7 @@ class TranscriptionWorker(QObject):
 
     def __init__(self, transcriber, audio_recorder,
                  mic_silence_threshold=0.005, sys_silence_threshold=0.01,
-                 mic_min_silence_ms=400, sys_min_silence_ms=500,
+                 mic_min_silence_ms=200, sys_min_silence_ms=500,
                  mic_min_speech_s=0.3, sys_min_speech_s=0.5,
                  max_speech_s=30.0, echo_diagnostics=None,
                  language=None, echo_gate_logging=False):
@@ -717,7 +717,7 @@ class CadenceApp(QObject):
             self.audio_recorder,
             mic_silence_threshold=0.005,
             sys_silence_threshold=0.01,
-            mic_min_silence_ms=400,
+            mic_min_silence_ms=200,
             sys_min_silence_ms=500,
             mic_min_speech_s=0.3,
             sys_min_speech_s=0.5,
