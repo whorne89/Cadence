@@ -27,6 +27,21 @@ class SilenceDetector:
             self._silent_samples = 0
             self._has_had_speech = True
 
+    def feed_rms(self, rms: float, num_samples: int):
+        """Feed a pre-computed RMS value instead of raw audio.
+
+        Behaves identically to feed() but skips RMS computation.
+        Used for bleed-compensated silence detection where the caller
+        adjusts the RMS before passing it in.
+        """
+        if num_samples == 0:
+            return
+        if rms < self.silence_threshold:
+            self._silent_samples += num_samples
+        else:
+            self._silent_samples = 0
+            self._has_had_speech = True
+
     def is_silent(self) -> bool:
         """True if silence has lasted at least min_silence_ms."""
         min_samples = int(self.sample_rate * self.min_silence_ms / 1000)
