@@ -59,6 +59,12 @@ class TranscriptionWorker(QObject):
     when silence is detected (or when max_speech_s safety valve triggers).
     """
 
+    # Fraction of sys_rms subtracted from mic_rms to compensate for speaker
+    # bleed into the microphone. Derived from session data: bleed ratio
+    # (mic_rms/sys_rms when only remote speaker talks) is 1.0-1.4.
+    # 0.8 under-compensates to avoid suppressing real user speech.
+    BLEED_FACTOR = 0.8
+
     segment_ready = Signal(str, str, float)  # speaker, text, timestamp_seconds
     segment_retracted = Signal(float)  # timestamp of "you" segment to remove
     finished = Signal()
@@ -143,7 +149,7 @@ class TranscriptionWorker(QObject):
                             frame.astype(np.float64) ** 2)))
                         sys_rms = float(np.sqrt(np.mean(
                             sys_frame.astype(np.float64) ** 2)))
-                        comp_rms = max(mic_rms - 0.8 * sys_rms, 0.0)
+                        comp_rms = max(mic_rms - self.BLEED_FACTOR * sys_rms, 0.0)
                         mic_detector.feed_rms(comp_rms, len(frame))
                     else:
                         mic_detector.feed(frame)

@@ -3,6 +3,18 @@
 All notable changes to Cadence are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- **Audio-level echo cancellation:** Spectral subtraction removes speaker echo from mic signal before Whisper transcription
+- **Bleed-compensated silence detection:** Subtracts estimated speaker bleed from mic RMS before feeding silence detector, enabling natural speech segmentation instead of 30s monolithic blocks
+- **Sound effects:** Start/stop chimes for recording sessions
+- **Auto-updater:** Checks for new releases and shows update toast notifications
+- **Settings improvements:** Audio device selection, model management, debug toggles
+
+### Changed
+- Mic silence detection threshold lowered from 400ms to 200ms (compensated silence gaps are shorter than 400ms in fast-paced meetings)
+
 ## [2.2.0] - 2026-03-03
 
 ### Added
