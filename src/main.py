@@ -127,11 +127,26 @@ class TranscriptionWorker(QObject):
 
             # --- Process mic audio ---
             mic_frames = self.audio_recorder._mic_frames
+            sys_frames = self.audio_recorder._system_frames
             mic_len = len(mic_frames)
             if mic_len > mic_offset:
                 new_frames = mic_frames[mic_offset:mic_len]
-                for frame in new_frames:
-                    mic_detector.feed(frame)
+                for i, frame in enumerate(new_frames):
+                    # Bleed-compensated silence detection:
+                    # Subtract estimated speaker bleed from mic RMS so
+                    # silence detector isn't fooled by system audio leaking
+                    # into the mic.
+                    sys_idx = mic_offset + i
+                    if sys_idx < len(sys_frames):
+                        sys_frame = sys_frames[sys_idx]
+                        mic_rms = float(np.sqrt(np.mean(
+                            frame.astype(np.float64) ** 2)))
+                        sys_rms = float(np.sqrt(np.mean(
+                            sys_frame.astype(np.float64) ** 2)))
+                        comp_rms = max(mic_rms - 0.8 * sys_rms, 0.0)
+                        mic_detector.feed_rms(comp_rms, len(frame))
+                    else:
+                        mic_detector.feed(frame)
                 mic_offset = mic_len
 
                 speech_frames = mic_frames[mic_speech_start:mic_offset]
