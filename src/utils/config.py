@@ -33,11 +33,19 @@ class ConfigManager:
         "ui": {
             "show_notifications": True,
             "minimize_to_tray": True,
+            "sound_effects_enabled": True,
         },
         "debug": {
             "enabled": False,
             "echo_diagnostics": False,
             "echo_gate_logging": False,
+        },
+        "stats": {
+            "total_recordings": 0,
+            "total_duration_s": 0,
+            "total_words": 0,
+            "you_words": 0,
+            "speaker_words": 0,
         },
     }
 
@@ -115,6 +123,26 @@ class ConfigManager:
 
     def is_echo_gate_logging_enabled(self):
         return self.get("debug", "echo_gate_logging", default=False)
+
+    def is_sound_effects_enabled(self):
+        return self.get("ui", "sound_effects_enabled", default=True)
+
+    # -- Statistics helpers ---------------------------------------------------
+
+    def get_stats(self):
+        """Return a copy of the stats dict."""
+        return dict(self.get("stats", default={}))
+
+    def increment_stat(self, key, amount=1):
+        """Increment a numeric stat by *amount*."""
+        current = self.get("stats", key, default=0)
+        self.set("stats", key, value=current + amount)
+
+    def reset_statistics(self):
+        """Reset all stats keys back to their defaults and persist."""
+        defaults = copy.deepcopy(self.DEFAULT_CONFIG.get("stats", {}))
+        self.config["stats"] = defaults
+        self.save()
 
     def _merge_configs(self, default, loaded):
         """Deep merge loaded config with defaults."""

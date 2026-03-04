@@ -4,6 +4,7 @@ CPU-only batch transcription using faster-whisper.
 """
 
 import logging
+import shutil
 import threading
 import tempfile
 import os
@@ -25,11 +26,26 @@ class Transcriber:
 
     VALID_MODELS = ["tiny", "base", "small", "medium"]
 
+    # Expected download sizes (MB) for progress estimation
+    MODEL_SIZES_MB = {
+        "tiny": 70,
+        "base": 140,
+        "small": 500,
+        "medium": 1500,
+    }
+
     def __init__(self, model_size="base", model_dir=None):
         self.model_size = model_size
         self.model_dir = model_dir
         self.model = None
         self._lock = threading.Lock()
+
+        # Resolve the models directory (used for download checks)
+        if self.model_dir:
+            self.models_dir = self.model_dir
+        else:
+            from utils.resource_path import get_app_data_path
+            self.models_dir = get_app_data_path("models")
 
     def _load_model(self):
         """Lazy load Whisper model on first use."""
@@ -42,7 +58,7 @@ class Transcriber:
             self.model_size,
             device="cpu",
             compute_type="int8",
-            download_root=self.model_dir,
+            download_root=self.models_dir,
         )
         logger.info("Model loaded successfully")
 
@@ -101,3 +117,90 @@ class Transcriber:
             self.model = None
             self.model_size = model_size
             logger.info(f"Model changed to '{model_size}' (will load on next use)")
+
+    # -- Model download helpers -----------------------------------------------
+
+    def _cache_dir_name(self, model_size):
+        """Return the huggingface_hub cache directory name for a model."""
+        if "/" in model_size:
+            return "models--" + model_size.replace("/", "--")
+        return f"models--Systran--faster-whisper-{model_size}"
+
+    def is_model_downloaded(self, model_size):
+        """
+        Check if a model is fully downloaded.
+
+        Returns True only when the cache directory exists, contains no
+        ``.incomplete`` blobs, and at least one snapshot has a ``model.bin``.
+        """
+        model_path = os.path.join(self.models_dir, self._cache_dir_name(model_size))
+
+        if not os.path.isdir(model_path):
+            return False
+
+        # .incomplete blobs mean a partial download
+        blobs_dir = os.path.join(model_path, "blobs")
+        if os.path.isdir(blobs_dir):
+            for fname in os.listdir(blobs_dir):
+                if fname.endswith(".incomplete"):
+                    return False
+
+        # At least one snapshot must contain model.bin
+        snapshots_dir = os.path.join(model_path, "snapshots")
+        if os.path.isdir(snapshots_dir):
+            for snap in os.listdir(snapshots_dir):
+                if os.path.isfile(os.path.join(snapshots_dir, snap, "model.bin")):
+                    return True
+
+        return False
+
+    def clean_partial_download(self, model_size):
+        """
+        Remove partially downloaded model files so the next download starts fresh.
+
+        Returns True if a partial download was cleaned up.
+        """
+        model_path = os.path.join(self.models_dir, self._cache_dir_name(model_size))
+
+        if not os.path.isdir(model_path):
+            return False
+
+        # Detect partial state
+        blobs_dir = os.path.join(model_path, "blobs")
+        has_incomplete = False
+        if os.path.isdir(blobs_dir):
+            for fname in os.listdir(blobs_dir):
+                if fname.endswith(".incomplete"):
+                    has_incomplete = True
+                    break
+
+        has_model_bin = False
+        snapshots_dir = os.path.join(model_path, "snapshots")
+        if os.path.isdir(snapshots_dir):
+            for snap in os.listdir(snapshots_dir):
+                if os.path.isfile(os.path.join(snapshots_dir, snap, "model.bin")):
+                    has_model_bin = True
+                    break
+
+        if has_incomplete or (os.path.isdir(snapshots_dir) and not has_model_bin):
+            logger.info(
+                f"Cleaning partial download for {model_size}: "
+                f"incomplete={has_incomplete}, model_bin={has_model_bin}"
+            )
+            try:
+                shutil.rmtree(model_path)
+                logger.info(f"Removed partial download directory: {model_path}")
+                return True
+            except Exception as e:
+                logger.error(f"Failed to clean partial download: {e}")
+                return False
+
+        return False
+
+    def clean_all_partial_downloads(self):
+        """Scan models_dir for any partial downloads and clean them up."""
+        cleaned = []
+        for model_size in self.VALID_MODELS:
+            if self.clean_partial_download(model_size):
+                cleaned.append(model_size)
+        return cleaned
