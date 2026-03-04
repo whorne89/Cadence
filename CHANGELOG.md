@@ -8,12 +8,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 ### Added
 - **Audio-level echo cancellation:** Spectral subtraction removes speaker echo from mic signal before Whisper transcription
 - **Bleed-compensated silence detection:** Subtracts estimated speaker bleed from mic RMS before feeding silence detector, enabling natural speech segmentation instead of 30s monolithic blocks
-- **Sound effects:** Start/stop chimes for recording sessions
-- **Auto-updater:** Checks for new releases and shows update toast notifications
-- **Settings improvements:** Audio device selection, model management, debug toggles
+- **Sound effects:** Piano chimes on recording start/stop (toggleable in Settings)
+- **Auto-updater:** Checks for new releases on startup and shows toast notification with download link
+- **Microphone level meter:** Test Microphone button in Settings opens real-time audio level monitor
+- **Model download management:** Automatic prompt to download missing Whisper models with progress dialog; partial download cleanup on retry
+- **Check for Updates button** in Settings for manual update checks
+- **Reset Statistics button** in Settings to clear usage metrics
+- **Usage statistics tracking:** Records total recordings, duration, word counts per speaker
+- **Echo diagnostics:** Pre-AEC raw mic audio now saved alongside post-AEC audio for comparison
 
 ### Changed
-- Mic silence detection threshold lowered from 400ms to 200ms (compensated silence gaps are shorter than 400ms in fast-paced meetings)
+- Mic minimum silence duration lowered from 400ms to 200ms (bleed-compensated silence gaps are shorter than 400ms in fast-paced meetings)
+- Settings dialog now scrollable with fixed-width layout to accommodate new sections
 
 ## [2.2.0] - 2026-03-03
 
