@@ -61,8 +61,13 @@ class EchoDiagnostics:
         logger.info(f"Echo diagnostics session started: {self._session_dir}")
 
     def record_chunk(self, mic_audio, sys_audio, mic_rms, sys_rms, ratio,
-                     echo_detected, timestamp):
-        """Enqueue a chunk for background writing. No-op when disabled."""
+                     echo_detected, timestamp, raw_mic_audio=None):
+        """Enqueue a chunk for background writing. No-op when disabled.
+
+        Args:
+            raw_mic_audio: Pre-AEC mic audio. If provided, saved alongside
+                           the (post-AEC) mic_audio for comparison.
+        """
         if not self.enabled or self._queue is None:
             return
 
@@ -83,6 +88,8 @@ class EchoDiagnostics:
             "echo_detected": echo_detected,
             "timestamp": timestamp,
         }
+        if raw_mic_audio is not None:
+            item["raw_mic_audio"] = np.array(raw_mic_audio, dtype=np.float32)
         self._queue.put(item)
 
     def save_live_transcript(self, segments):
@@ -153,6 +160,11 @@ class EchoDiagnostics:
         sys_path = chunks_dir / f"chunk_{idx:04d}_sys.wav"
         _write_wav(sys_path, item["sys_audio"], SAMPLE_RATE)
 
+        # Write raw (pre-AEC) mic WAV if available
+        if "raw_mic_audio" in item:
+            raw_path = chunks_dir / f"chunk_{idx:04d}_mic_raw.wav"
+            _write_wav(raw_path, item["raw_mic_audio"], SAMPLE_RATE)
+
         # Write metadata
         meta_path = chunks_dir / f"chunk_{idx:04d}.json"
         meta = {
@@ -164,6 +176,7 @@ class EchoDiagnostics:
             "timestamp": item["timestamp"],
             "mic_samples": len(item["mic_audio"]),
             "sys_samples": len(item["sys_audio"]),
+            "aec_applied": "raw_mic_audio" in item,
         }
         meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
 

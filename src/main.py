@@ -3,13 +3,23 @@ Cadence - Meeting Transcription
 Main entry point that orchestrates all components.
 """
 
+import os
 import sys
+
+# PyInstaller windowed mode (console=False) sets sys.stdout/stderr to None.
+# Libraries like huggingface_hub use tqdm which calls sys.stderr.write(),
+# crashing with "NoneType has no attribute 'write'". Redirect to devnull.
+if sys.stdout is None:
+    sys.stdout = open(os.devnull, "w")
+if sys.stderr is None:
+    sys.stderr = open(os.devnull, "w")
+
 import ctypes
 import logging
 import time
 
 from PySide6.QtWidgets import QApplication
-from PySide6.QtCore import QObject, Signal, QThread, Qt
+from PySide6.QtCore import QObject, Signal, QThread, QTimer, Qt
 import numpy as np
 
 
@@ -30,6 +40,9 @@ from gui.main_window import MainWindow
 from gui.settings_dialog import SettingsDialog
 from gui.theme import apply_theme
 from core.echo_diagnostics import EchoDiagnostics
+from core.sound_effects import SoundEffects
+from core.updater import UpdateChecker, UpdateWorker
+from gui.update_toast import UpdateToast
 from utils.config import ConfigManager
 from utils.logger import setup_logger
 
@@ -147,6 +160,19 @@ class TranscriptionWorker(QObject):
                         self.audio_recorder._system_frames,
                         mic_start_sample, mic_end_sample,
                     )
+
+                    # AEC: spectral subtraction removes echo from mic audio
+                    # before any further processing or transcription.
+                    aec_applied = False
+                    raw_mic_audio = None
+                    if len(sys_audio) > int(sr * 0.2):
+                        from core.echo_cancellation import spectral_subtract_echo
+                        raw_mic_audio = mic_audio.copy()
+                        mic_audio = spectral_subtract_echo(
+                            mic_audio, sys_audio, sr=sr,
+                        )
+                        aec_applied = True
+
                     if len(sys_audio) > 0:
                         sys_rms = float(np.sqrt(np.mean(sys_audio.astype(np.float64) ** 2)))
                         mic_rms = float(np.sqrt(np.mean(mic_audio.astype(np.float64) ** 2)))
@@ -174,6 +200,7 @@ class TranscriptionWorker(QObject):
                                     mic_audio, sys_audio,
                                     mic_rms, sys_rms, ratio,
                                     echo_detected, timestamp,
+                                    raw_mic_audio=raw_mic_audio,
                                 )
 
                     # Tier 3: audio envelope correlation
@@ -197,7 +224,11 @@ class TranscriptionWorker(QObject):
                         logger.info(f"Echo suppressed at {timestamp:.1f}s (energy gate)")
                     else:
                         # Energy gate passed — transcribe, then text-compare
-                        text = self._transcribe_audio(speech_frames)
+                        # Use AEC-cleaned audio if available
+                        text = self._transcribe_audio(
+                            speech_frames,
+                            audio=mic_audio if aec_applied else None,
+                        )
                         if text:
                             is_echo, recovered = self._is_text_echo(text, timestamp)
                             if is_echo and recovered is None:
@@ -292,10 +323,15 @@ class TranscriptionWorker(QObject):
         logger.info("Transcription worker stopped")
         self.finished.emit()
 
-    def _transcribe_audio(self, frames):
-        """Concatenate frames and transcribe to text. Returns None on failure."""
+    def _transcribe_audio(self, frames, audio=None):
+        """Concatenate frames and transcribe to text. Returns None on failure.
+
+        If *audio* is provided (pre-processed numpy array), use it directly
+        instead of concatenating frames.
+        """
         try:
-            audio = np.concatenate(frames)
+            if audio is None:
+                audio = np.concatenate(frames)
             if len(audio) > 0:
                 text = self.transcriber.transcribe_text(audio, language=self.language)
                 if text and text.strip():
@@ -556,6 +592,11 @@ class CadenceApp(QObject):
         streaming_model_size = self.config.get_streaming_model_size()
         self.streaming_transcriber = Transcriber(model_size=streaming_model_size)
 
+        # Clean up any partial model downloads from previous crashes
+        cleaned = self.streaming_transcriber.clean_all_partial_downloads()
+        if cleaned:
+            self.logger.info(f"Cleaned partial model downloads: {cleaned}")
+
         # GUI components (set after creation in main())
         self.tray_icon = None
         self.main_window = None
@@ -577,6 +618,19 @@ class CadenceApp(QObject):
         self.echo_diagnostics = EchoDiagnostics(
             enabled=self.config.is_echo_debug_enabled()
         )
+
+        # Sound effects
+        self.sound_effects = SoundEffects()
+
+        # Auto-update checker (runs 8s after startup to avoid blocking)
+        self._update_thread = None
+        self._update_worker = None
+        self._update_toast = None
+        self._update_info = None
+        self._update_timer = QTimer(self)
+        self._update_timer.setSingleShot(True)
+        self._update_timer.timeout.connect(self._check_for_updates)
+        self._update_timer.start(8000)
 
         self.logger.info("Application initialized")
 
@@ -630,6 +684,10 @@ class CadenceApp(QObject):
                 "Recording", "Recording started",
                 details=f"Started at {start_time}",
             )
+
+        # Play start chime
+        if self.config.is_sound_effects_enabled():
+            self.sound_effects.play_start_tone()
 
     def _start_transcription_worker(self):
         """Launch the transcription worker in a background QThread."""
@@ -706,6 +764,10 @@ class CadenceApp(QObject):
     def stop_recording(self):
         """Stop recording and launch post-processing after worker finishes."""
         self.logger.info("Stopping recording...")
+
+        # Play stop chime
+        if self.config.is_sound_effects_enabled():
+            self.sound_effects.play_stop_tone()
 
         # Signal transcription worker to stop (non-blocking — let it flush)
         if self._transcription_worker is not None:
@@ -817,9 +879,12 @@ class CadenceApp(QObject):
         try:
             dialog = SettingsDialog(
                 self.config, self.audio_recorder,
-                session_manager=self.session_manager, parent=self.main_window,
+                session_manager=self.session_manager,
+                transcriber=self.streaming_transcriber,
+                parent=self.main_window,
             )
             dialog.settings_changed.connect(self._on_settings_changed)
+            dialog.check_for_updates.connect(self.check_for_updates_manual)
             dialog.exec()
         except Exception as e:
             self.logger.error(f"Failed to show settings dialog: {e}")
@@ -921,6 +986,107 @@ class CadenceApp(QObject):
         if self.main_window:
             self.main_window.set_folders(folders)
 
+    # -- Auto-update --------------------------------------------------------
+
+    def _check_for_updates(self):
+        """Launch update check in a background QThread."""
+        self.logger.info("Checking for updates...")
+        self._update_thread = QThread()
+        self._update_worker = UpdateWorker()
+        self._update_worker.moveToThread(self._update_thread)
+
+        self._update_thread.started.connect(self._update_worker.run)
+        self._update_worker.update_available.connect(self._on_update_available)
+        self._update_worker.finished.connect(self._cleanup_update_thread)
+
+        self._update_thread.start()
+
+    def _cleanup_update_thread(self):
+        """Clean up the update checker thread."""
+        if self._update_thread is not None:
+            self._update_thread.quit()
+            self._update_thread.wait(2000)
+            self._update_thread.deleteLater()
+            self._update_thread = None
+        if self._update_worker is not None:
+            self._update_worker.deleteLater()
+            self._update_worker = None
+
+    def _on_update_available(self, update_info):
+        """Show the update toast when a new version is found."""
+        self._update_info = update_info
+        self.logger.info(f"Update available: {update_info.version_str}")
+
+        from utils.resource_path import is_bundled
+        if not is_bundled():
+            source_msg = UpdateChecker.get_source_update_message(update_info)
+            body = source_msg + "\n\n" + (update_info.release_body or "")
+        else:
+            body = update_info.release_body
+
+        self._update_toast = UpdateToast(
+            update_info.version_str,
+            release_body=body,
+        )
+        self._update_toast.accepted.connect(self._apply_update)
+        self._update_toast.dismissed.connect(self._dismiss_update)
+        self._update_toast.show_toast()
+
+    def _apply_update(self):
+        """Download and apply the update (bundled) or just dismiss (source)."""
+        from utils.resource_path import is_bundled
+
+        if self._update_info is None:
+            return
+
+        if not is_bundled():
+            self.logger.info("Source install — user should run: git pull && uv sync")
+            self._update_toast = None
+            return
+
+        self.logger.info(f"Downloading update {self._update_info.version_str}...")
+        if self.tray_icon is not None:
+            self.tray_icon.show_notification(
+                "Downloading Update",
+                f"Downloading Cadence {self._update_info.version_str}...",
+            )
+
+        checker = UpdateChecker()
+        downloaded = checker.download_update(self._update_info)
+        if downloaded is None:
+            self.logger.error("Update download failed")
+            if self.tray_icon is not None:
+                self.tray_icon.show_notification(
+                    "Update Failed",
+                    "Could not download the update. Try again later.",
+                )
+            return
+
+        success = checker.apply_update(downloaded)
+        if success:
+            self.logger.info("Update applied, shutting down for restart")
+            self.quit()
+        else:
+            self.logger.error("Failed to apply update")
+            if self.tray_icon is not None:
+                self.tray_icon.show_notification(
+                    "Update Failed",
+                    "Could not apply the update. Try again later.",
+                )
+
+    def _dismiss_update(self):
+        """User dismissed the update toast."""
+        self.logger.info("Update dismissed by user")
+        self._update_toast = None
+
+    def check_for_updates_manual(self):
+        """Manually trigger an update check (e.g. from settings button)."""
+        self.logger.info("Manual update check requested")
+        if self._update_thread is not None and self._update_thread.isRunning():
+            self.logger.info("Update check already in progress")
+            return
+        self._check_for_updates()
+
     def show_window(self):
         """Show and raise the main window."""
         if self.main_window is not None:
@@ -931,6 +1097,12 @@ class CadenceApp(QObject):
     def quit(self):
         """Clean shutdown of the application."""
         self.logger.info("Shutting down Cadence...")
+
+        # Stop update timer and thread
+        self._update_timer.stop()
+        if self._update_thread is not None and self._update_thread.isRunning():
+            self._update_thread.quit()
+            self._update_thread.wait(2000)
 
         # Stop transcription worker
         self._stop_transcription_worker()
