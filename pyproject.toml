@@ -20,6 +20,8 @@ dependencies = [
     "faster-whisper>=1.0.0",
     "soundfile>=0.12.1",
     "PyAudioWPatch>=0.2.12",
+    "pyroomacoustics>=0.8.0",
+    "noisereduce>=3.0.0",
 ]
 
 [project.optional-dependencies]
