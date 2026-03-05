@@ -20,6 +20,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 ### Changed
 - Replaced STFT spectral subtraction with Wiener filter (scipy) + spectral gating (noisereduce) for echo cancellation — significantly better echo removal while preserving user speech during double-talk
 - Fixed pipeline ordering: echo gate now checks raw audio before AEC processes survivors, restoring gate threshold effectiveness
+- Recalibrated echo gate thresholds based on real meeting data — mic_rms limits raised from 0.014/0.020 to 0.040/0.055, ratio widened to catch more bleed patterns
+- Added post-AEC echo detection: suppresses chunks where AEC removed >70% of signal energy (confirms chunk was mostly echo)
+- Raised envelope correlation mic_rms guard from 0.020 to 0.055 to match recalibrated energy gate
 - Added pyroomacoustics and noisereduce as dependencies
 - Mic minimum silence duration lowered from 400ms to 200ms (bleed-compensated silence gaps are shorter than 400ms in fast-paced meetings)
 - Settings dialog now scrollable with fixed-width layout to accommodate new sections

@@ -188,9 +188,11 @@ class TranscriptionWorker(QObject):
                         mic_rms = float(np.sqrt(np.mean(mic_audio.astype(np.float64) ** 2)))
                         if sys_rms > 0.005:
                             ratio = mic_rms / sys_rms if sys_rms > 0 else float('inf')
+                            # Tier 1: Low mic energy + ratio confirms bleed
+                            # Tier 2: Very low ratio (mic << sys) with moderate mic
                             echo_detected = (
-                                (ratio < 1.5 and mic_rms < 0.014) or
-                                (ratio < 0.65 and mic_rms < 0.020 and sys_rms > 0.030)
+                                (ratio < 1.5 and mic_rms < 0.040) or
+                                (ratio < 0.75 and mic_rms < 0.055 and sys_rms > 0.020)
                             )
                             if self.echo_gate_logging:
                                 logger.info(
@@ -199,13 +201,13 @@ class TranscriptionWorker(QObject):
                                     f"ratio={ratio:.2f}, suppressed={echo_detected}"
                                 )
 
-                    # Tier 2: audio envelope correlation (on raw audio)
+                    # Tier 3: audio envelope correlation (on raw audio)
                     if not echo_detected and len(sys_audio) > 0:
                         from core.echo_gate import is_echo
                         audio_is_echo, correlation = is_echo(
                             mic_audio, sys_audio, threshold=0.7, detail=True
                         )
-                        if audio_is_echo and mic_rms < 0.020:
+                        if audio_is_echo and mic_rms < 0.055:
                             echo_detected = True
                             if self.echo_gate_logging:
                                 logger.info(
@@ -222,6 +224,27 @@ class TranscriptionWorker(QObject):
                         raw_mic_audio = mic_audio.copy()
                         mic_audio = cancel_echo(mic_audio, sys_audio, sr=sr)
                         aec_applied = True
+
+                    # --- Post-AEC echo check ---
+                    # If AEC removed >70% of signal energy, chunk was mostly echo
+                    if aec_applied and raw_mic_audio is not None:
+                        cleaned_rms = float(np.sqrt(np.mean(
+                            mic_audio.astype(np.float64) ** 2
+                        )))
+                        raw_rms = float(np.sqrt(np.mean(
+                            raw_mic_audio.astype(np.float64) ** 2
+                        )))
+                        if raw_rms > 0:
+                            reduction = 1.0 - (cleaned_rms / raw_rms)
+                            if reduction > 0.70 and cleaned_rms < 0.015:
+                                echo_detected = True
+                                if self.echo_gate_logging:
+                                    logger.info(
+                                        f"Echo gate (post-AEC) at {timestamp:.1f}s: "
+                                        f"raw_rms={raw_rms:.4f}, "
+                                        f"cleaned_rms={cleaned_rms:.4f}, "
+                                        f"reduction={reduction:.0%}, suppressed=True"
+                                    )
 
                     # Record diagnostics (after gate decision, with raw audio if AEC ran)
                     if self.echo_diagnostics and len(sys_audio) > 0 and sys_rms > 0.005:
