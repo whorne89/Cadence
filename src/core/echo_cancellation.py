@@ -1,36 +1,43 @@
 """
 Audio-level echo cancellation for Cadence.
 
-Removes speaker echo from the microphone signal using spectral subtraction
-BEFORE passing audio to Whisper for transcription.
+Two-stage pipeline:
+1. Wiener filter — estimates echo path from system audio, subtracts predicted echo
+2. Spectral gating (noisereduce) — light cleanup of residual echo
+
+Uses system audio (WASAPI loopback) as the far-end reference signal.
 """
 
 import numpy as np
-from scipy.signal import stft, istft, fftconvolve
+from scipy.linalg import solve_toeplitz
+from scipy.signal import fftconvolve
+
+import noisereduce as nr
 
 
-def spectral_subtract_echo(mic_audio, sys_audio, sr=16000,
-                           n_fft=1024, hop=256,
-                           alpha_low=2.0, alpha_high=1.0,
-                           beta=0.02, max_delay_ms=80):
+def cancel_echo(mic_audio, sys_audio, sr=16000,
+                filter_length=1600,
+                noise_reduce_strength=0.3,
+                max_delay_ms=80, reg=0.01):
     """
-    Remove echo of sys_audio from mic_audio using spectral subtraction.
+    Remove echo of sys_audio from mic_audio.
 
-    Works in the frequency domain: subtracts the system audio's magnitude
-    spectrum from the mic's, preserving the mic's phase. Uses per-band
-    alpha (more aggressive below 2kHz where speaker echo concentrates).
+    Stage 1: Constrained Wiener filter estimates the acoustic echo path
+    (speaker -> room -> mic) from cross-correlation, then subtracts the
+    predicted echo. Filter is limited to filter_length taps to prevent
+    over-subtraction of user speech during double-talk.
+
+    Stage 2: noisereduce spectral gating catches residual echo using
+    sys_audio as the noise profile reference.
 
     Args:
-        mic_audio: Mic signal (float32, 16kHz) — contains user voice + echo.
-        sys_audio: System/reference signal (float32, 16kHz) — clean speaker audio.
+        mic_audio: Mic signal (float32, 16kHz) — user voice + echo.
+        sys_audio: System/loopback signal (float32, 16kHz) — clean reference.
         sr: Sample rate in Hz.
-        n_fft: STFT window size in samples (64ms at 16kHz).
-        hop: STFT hop size in samples (16ms at 16kHz).
-        alpha_low: Oversubtraction factor for frequencies below 2kHz.
-        alpha_high: Oversubtraction factor for frequencies above 2kHz.
-        beta: Spectral floor (fraction of original magnitude). Prevents
-              musical noise artifacts.
-        max_delay_ms: Maximum echo delay to search for in ms.
+        filter_length: Wiener filter taps. 1600 = 100ms at 16kHz.
+        noise_reduce_strength: noisereduce prop_decrease (0-1). 0.6 = moderate.
+        max_delay_ms: Maximum echo delay to search for.
+        reg: Tikhonov regularization factor for Wiener filter stability.
 
     Returns:
         Cleaned mic audio as float32 numpy array, same length as input.
@@ -50,10 +57,8 @@ def spectral_subtract_echo(mic_audio, sys_audio, sr=16000,
     mic = mic_audio.astype(np.float64)
     sys = sys_audio.astype(np.float64)
 
-    # Step 1: Find echo delay via cross-correlation
+    # Step 1: Find echo delay and align signals
     delay = _estimate_delay(mic, sys, sr, max_delay_ms)
-
-    # Step 2: Align sys_audio to match echo timing
     aligned_sys = _align_signal(sys, delay, len(mic))
 
     # Trim to common length
@@ -61,35 +66,51 @@ def spectral_subtract_echo(mic_audio, sys_audio, sr=16000,
     mic = mic[:min_len]
     ref = aligned_sys[:min_len]
 
-    # Step 3: STFT both signals
-    _, _, Z_mic = stft(mic, fs=sr, nperseg=n_fft, noverlap=n_fft - hop)
-    _, _, Z_ref = stft(ref, fs=sr, nperseg=n_fft, noverlap=n_fft - hop)
+    # Step 2: Constrained Wiener filter
+    # Solve for echo path h: mic ≈ h * ref + user_speech
+    # h = R_xx^{-1} * r_xy (Wiener-Hopf solution), truncated to filter_length
+    try:
+        # Autocorrelation of reference signal
+        corr_xx = fftconvolve(ref, ref[::-1], mode='full')
+        mid = len(ref) - 1
+        r_xx = corr_xx[mid:mid + filter_length]
+        r_xx[0] += reg * r_xx[0]  # Tikhonov regularization
 
-    mag_mic = np.abs(Z_mic)
-    mag_ref = np.abs(Z_ref)
-    phase_mic = np.angle(Z_mic)
+        # Cross-correlation of mic and reference
+        corr_xy = fftconvolve(mic, ref[::-1], mode='full')
+        r_xy = corr_xy[mid:mid + filter_length]
 
-    # Step 4: Per-band alpha — aggressive below 2kHz, gentle above
-    n_freq_bins = mag_ref.shape[0]
-    freq_bins = np.linspace(0, sr / 2, n_freq_bins)
-    alpha = np.where(freq_bins < 2000, alpha_low, alpha_high)
-    alpha = alpha[:, np.newaxis]  # broadcast over time frames
+        # Solve Toeplitz system for echo path filter
+        h = solve_toeplitz(r_xx, r_xy)
 
-    # Subtract with spectral floor
-    mag_clean = mag_mic - alpha * mag_ref
-    mag_clean = np.maximum(mag_clean, beta * mag_mic)
+        # Subtract estimated echo
+        echo_est = fftconvolve(h, ref)[:min_len]
+        cleaned = mic - echo_est
+    except Exception:
+        # Fallback: if Wiener filter fails, return original
+        cleaned = mic
 
-    # Step 5: Reconstruct with original mic phase
-    Z_clean = mag_clean * np.exp(1j * phase_mic)
-    _, cleaned = istft(Z_clean, fs=sr, nperseg=n_fft, noverlap=n_fft - hop)
+    # Step 3: Spectral gating cleanup for residual echo
+    try:
+        cleaned_f32 = cleaned.astype(np.float32)
+        ref_f32 = ref.astype(np.float32)
+        cleaned_f32 = nr.reduce_noise(
+            y=cleaned_f32,
+            sr=sr,
+            y_noise=ref_f32,
+            prop_decrease=noise_reduce_strength,
+        )
+        cleaned = cleaned_f32.astype(np.float64)
+    except Exception:
+        # If noisereduce fails, continue with Wiener output only
+        pass
 
     # Match original length
-    if len(cleaned) >= orig_len:
-        cleaned = cleaned[:orig_len]
-    else:
-        cleaned = np.pad(cleaned, (0, orig_len - len(cleaned)))
+    result = np.zeros(orig_len, dtype=np.float64)
+    copy_len = min(len(cleaned), orig_len)
+    result[:copy_len] = cleaned[:copy_len]
 
-    return cleaned.astype(np.float32)
+    return result.astype(np.float32)
 
 
 def _estimate_delay(mic, sys, sr, max_delay_ms):
@@ -122,7 +143,6 @@ def _estimate_delay(mic, sys, sr, max_delay_ms):
     peak_val = np.abs(positive_corr[delay])
     mean_val = np.mean(np.abs(positive_corr))
     if mean_val > 0 and peak_val / mean_val < 2.0:
-        # No clear echo peak — correlation is flat/noisy
         return 0
 
     return delay
