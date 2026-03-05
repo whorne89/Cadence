@@ -182,29 +182,11 @@ class TranscriptionWorker(QObject):
                         mic_start_sample, mic_end_sample,
                     )
 
-                    # AEC: spectral subtraction removes echo from mic audio
-                    # before any further processing or transcription.
-                    aec_applied = False
-                    raw_mic_audio = None
-                    if len(sys_audio) > int(sr * 0.2):
-                        from core.echo_cancellation import spectral_subtract_echo
-                        raw_mic_audio = mic_audio.copy()
-                        mic_audio = spectral_subtract_echo(
-                            mic_audio, sys_audio, sr=sr,
-                        )
-                        aec_applied = True
-
+                    # --- Echo gate on RAW audio (before any AEC) ---
                     if len(sys_audio) > 0:
                         sys_rms = float(np.sqrt(np.mean(sys_audio.astype(np.float64) ** 2)))
                         mic_rms = float(np.sqrt(np.mean(mic_audio.astype(np.float64) ** 2)))
                         if sys_rms > 0.005:
-                            # Two-tier echo gate:
-                            # 1) Normal bleed: ratio < 1.5 and mic_rms < 0.014
-                            #    catches ~95% of bleed (mic_rms stays below 0.013)
-                            # 2) Loud-system bleed: when sys_rms > 0.030, louder
-                            #    system audio produces proportionally louder bleed
-                            #    (mic_rms 0.014-0.020). Safe to raise the floor
-                            #    when ratio is low (< 0.65), confirming bleed pattern.
                             ratio = mic_rms / sys_rms if sys_rms > 0 else float('inf')
                             echo_detected = (
                                 (ratio < 1.5 and mic_rms < 0.014) or
@@ -216,17 +198,8 @@ class TranscriptionWorker(QObject):
                                     f"mic_rms={mic_rms:.4f}, sys_rms={sys_rms:.4f}, "
                                     f"ratio={ratio:.2f}, suppressed={echo_detected}"
                                 )
-                            if self.echo_diagnostics:
-                                self.echo_diagnostics.record_chunk(
-                                    mic_audio, sys_audio,
-                                    mic_rms, sys_rms, ratio,
-                                    echo_detected, timestamp,
-                                    raw_mic_audio=raw_mic_audio,
-                                )
 
-                    # Tier 3: audio envelope correlation
-                    # Catches echo that energy gate misses when Whisper
-                    # transcribes different words per channel (text match fails).
+                    # Tier 2: audio envelope correlation (on raw audio)
                     if not echo_detected and len(sys_audio) > 0:
                         from core.echo_gate import is_echo
                         audio_is_echo, correlation = is_echo(
@@ -240,6 +213,24 @@ class TranscriptionWorker(QObject):
                                     f"correlation={correlation:.2f}, "
                                     f"mic_rms={mic_rms:.4f}, suppressed=True"
                                 )
+
+                    # --- AEC: only clean chunks that PASSED the echo gate ---
+                    aec_applied = False
+                    raw_mic_audio = None
+                    if not echo_detected and len(sys_audio) > int(sr * 0.2):
+                        from core.echo_cancellation import cancel_echo
+                        raw_mic_audio = mic_audio.copy()
+                        mic_audio = cancel_echo(mic_audio, sys_audio, sr=sr)
+                        aec_applied = True
+
+                    # Record diagnostics (after gate decision, with raw audio if AEC ran)
+                    if self.echo_diagnostics and len(sys_audio) > 0 and sys_rms > 0.005:
+                        self.echo_diagnostics.record_chunk(
+                            mic_audio, sys_audio,
+                            mic_rms, sys_rms, ratio,
+                            echo_detected, timestamp,
+                            raw_mic_audio=raw_mic_audio,
+                        )
 
                     if echo_detected:
                         logger.info(f"Echo suppressed at {timestamp:.1f}s (energy gate)")
