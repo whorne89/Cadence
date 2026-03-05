@@ -18,6 +18,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 - **Echo diagnostics:** Pre-AEC raw mic audio now saved alongside post-AEC audio for comparison
 
 ### Changed
+- Replaced STFT spectral subtraction with Wiener filter (scipy) + spectral gating (noisereduce) for echo cancellation — significantly better echo removal while preserving user speech during double-talk
+- Fixed pipeline ordering: echo gate now checks raw audio before AEC processes survivors, restoring gate threshold effectiveness
+- Added pyroomacoustics and noisereduce as dependencies
 - Mic minimum silence duration lowered from 400ms to 200ms (bleed-compensated silence gaps are shorter than 400ms in fast-paced meetings)
 - Settings dialog now scrollable with fixed-width layout to accommodate new sections
 
