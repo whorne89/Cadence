@@ -23,7 +23,6 @@ class ConfigManager:
         "audio": {
             "sample_rate": 16000,
             "mic_device_index": None,
-            "system_device_index": None,
             "channels": 1,
         },
         "user": {
@@ -36,8 +35,6 @@ class ConfigManager:
         },
         "debug": {
             "enabled": False,
-            "echo_diagnostics": False,
-            "echo_gate_logging": False,
         },
     }
 
@@ -101,20 +98,11 @@ class ConfigManager:
     def get_mic_device(self):
         return self.get("audio", "mic_device_index", default=None)
 
-    def get_system_device(self):
-        return self.get("audio", "system_device_index", default=None)
-
     def get_first_name(self):
         return self.get("user", "first_name", default="")
 
     def is_debug_enabled(self):
         return self.get("debug", "enabled", default=False)
-
-    def is_echo_debug_enabled(self):
-        return self.get("debug", "echo_diagnostics", default=False)
-
-    def is_echo_gate_logging_enabled(self):
-        return self.get("debug", "echo_gate_logging", default=False)
 
     def _merge_configs(self, default, loaded):
         """Deep merge loaded config with defaults."""

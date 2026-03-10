@@ -36,8 +36,8 @@ def test_delete_folder(sm):
 
 def test_save_transcript_creates_date_folder(sm):
     segments = [
-        {"speaker": "you", "text": "Hello", "start": 5.0},
-        {"speaker": "them", "text": "Hi there", "start": 12.0},
+        {"text": "Hello everyone", "start": 5.0},
+        {"text": "Hi there", "start": 12.0},
     ]
     path = sm.save_transcript(segments, duration=45.0, model="base")
     assert path is not None
@@ -45,26 +45,43 @@ def test_save_transcript_creates_date_folder(sm):
     p = Path(path)
     assert p.exists()
     content = p.read_text()
-    assert "Hello" in content
-    assert "[00:05] You:" in content
-    assert "[00:12] Speaker:" in content
+    assert "Hello everyone" in content
+    assert "[00:05]" in content
+    assert "[00:12]" in content
     assert "Duration:" in content
 
 
 def test_load_transcript(sm):
     segments = [
-        {"speaker": "you", "text": "Test line", "start": 3.0},
+        {"text": "Test line", "start": 3.0},
     ]
     path = sm.save_transcript(segments, duration=10.0, model="base")
     loaded = sm.load_transcript(path)
-    assert loaded["segments"][0]["speaker"] == "you"
     assert loaded["segments"][0]["text"] == "Test line"
     assert loaded["duration"] == "00:00:10"
     assert loaded["model"] == "base"
 
 
+def test_load_transcript_backward_compat(sm):
+    """Should strip legacy speaker prefixes when loading old transcripts."""
+    folder = "compat"
+    sm.create_folder(folder)
+    folder_path = sm.sessions_dir / folder
+    (folder_path / "old.txt").write_text(
+        "Cadence Transcript\nDate: 2026-03-01 10:00\nDuration: 00:01:00\nModel: base\n\n---\n\n"
+        "[00:05] You: Hello\n"
+        "[00:10] Speaker: Hi there\n"
+        "[00:15] Them: Goodbye\n",
+        encoding="utf-8",
+    )
+    loaded = sm.load_transcript(str(folder_path / "old.txt"))
+    assert loaded["segments"][0]["text"] == "Hello"
+    assert loaded["segments"][1]["text"] == "Hi there"
+    assert loaded["segments"][2]["text"] == "Goodbye"
+
+
 def test_list_transcripts(sm):
-    segments = [{"speaker": "you", "text": "Hello", "start": 0.0}]
+    segments = [{"text": "Hello", "start": 0.0}]
     path = sm.save_transcript(segments, duration=10.0, model="base")
     folder = Path(path).parent.name
     transcripts = sm.list_transcripts(folder)
@@ -75,7 +92,6 @@ def test_list_transcripts_sorted_by_date(sm):
     """Transcripts should sort by date in file, not filename."""
     folder = "test-sort"
     sm.create_folder(folder)
-    # Create files with explicit date headers (older first)
     folder_path = sm.sessions_dir / folder
     (folder_path / "zzz.txt").write_text(
         "Cadence Transcript\nDate: 2026-01-01 09:00\nDuration: 00:00:10\nModel: base\n\n---\n",
@@ -85,18 +101,16 @@ def test_list_transcripts_sorted_by_date(sm):
         "Cadence Transcript\nDate: 2026-02-15 14:30\nDuration: 00:00:10\nModel: base\n\n---\n",
         encoding="utf-8",
     )
-    # Descending (newest first) — aaa (Feb) before zzz (Jan)
     desc = sm.list_transcripts(folder, sort_descending=True)
     assert desc[0]["name"] == "aaa"
     assert desc[1]["name"] == "zzz"
-    # Ascending (oldest first) — zzz (Jan) before aaa (Feb)
     asc = sm.list_transcripts(folder, sort_descending=False)
     assert asc[0]["name"] == "zzz"
     assert asc[1]["name"] == "aaa"
 
 
 def test_rename_transcript(sm):
-    segments = [{"speaker": "you", "text": "Hello", "start": 0.0}]
+    segments = [{"text": "Hello", "start": 0.0}]
     path = sm.save_transcript(segments, duration=10.0, model="base")
     p = Path(path)
     folder = p.parent.name
@@ -109,7 +123,7 @@ def test_rename_transcript(sm):
 
 def test_move_transcript(sm):
     sm.create_folder("Destination")
-    segments = [{"speaker": "you", "text": "Hello", "start": 0.0}]
+    segments = [{"text": "Hello", "start": 0.0}]
     path = sm.save_transcript(segments, duration=10.0, model="base")
     p = Path(path)
     src_folder = p.parent.name
@@ -120,7 +134,7 @@ def test_move_transcript(sm):
 
 
 def test_delete_transcript(sm):
-    segments = [{"speaker": "you", "text": "Hello", "start": 0.0}]
+    segments = [{"text": "Hello", "start": 0.0}]
     path = sm.save_transcript(segments, duration=10.0, model="base")
     p = Path(path)
     folder = p.parent.name
@@ -155,7 +169,7 @@ def test_create_folder_sanitizes_name(sm):
 
 
 def test_save_transcript_sanitizes_name(sm):
-    segments = [{"speaker": "you", "text": "Hello", "start": 0.0}]
+    segments = [{"text": "Hello", "start": 0.0}]
     path = sm.save_transcript(segments, duration=10.0, model="base", folder="test", name='Meeting: "Q1"')
     p = Path(path)
     assert ":" not in p.stem
@@ -172,7 +186,7 @@ def test_rename_folder_sanitizes_new_name(sm):
 
 
 def test_rename_transcript_sanitizes_new_name(sm):
-    segments = [{"speaker": "you", "text": "Hello", "start": 0.0}]
+    segments = [{"text": "Hello", "start": 0.0}]
     path = sm.save_transcript(segments, duration=10.0, model="base", folder="test", name="original")
     sm.rename_transcript("test", "original", 'New: "Name"')
     transcripts = sm.list_transcripts("test")
@@ -191,7 +205,7 @@ def test_rename_folder_raises_if_dest_exists(sm):
 
 
 def test_rename_transcript_raises_if_dest_exists(sm):
-    segments = [{"speaker": "you", "text": "Hello", "start": 0.0}]
+    segments = [{"text": "Hello", "start": 0.0}]
     sm.save_transcript(segments, duration=10.0, model="base", folder="test", name="first")
     sm.save_transcript(segments, duration=10.0, model="base", folder="test", name="second")
     with pytest.raises(FileExistsError, match="already exists"):
@@ -199,7 +213,7 @@ def test_rename_transcript_raises_if_dest_exists(sm):
 
 
 def test_move_transcript_raises_if_dest_exists(sm):
-    segments = [{"speaker": "you", "text": "Hello", "start": 0.0}]
+    segments = [{"text": "Hello", "start": 0.0}]
     sm.save_transcript(segments, duration=10.0, model="base", folder="src", name="file")
     sm.save_transcript(segments, duration=10.0, model="base", folder="dest", name="file")
     with pytest.raises(FileExistsError, match="already exists"):
@@ -244,3 +258,23 @@ def test_delete_transcript_warns_if_missing(sm, caplog):
     with caplog.at_level(logging.WARNING, logger="Cadence"):
         sm.delete_transcript("test", "nonexistent")
     assert "does not exist" in caplog.text
+
+
+# --- Metrics tests ---
+
+def test_get_metrics_empty(sm):
+    metrics = sm.get_metrics()
+    assert metrics["total_recordings"] == 0
+    assert metrics["total_words"] == 0
+
+
+def test_get_metrics_with_data(sm):
+    segments = [
+        {"text": "Hello world", "start": 0.0},
+        {"text": "This is a test", "start": 5.0},
+    ]
+    sm.save_transcript(segments, duration=30.0, model="base")
+    metrics = sm.get_metrics()
+    assert metrics["total_recordings"] == 1
+    assert metrics["total_words"] == 6
+    assert metrics["total_duration_s"] == 30.0

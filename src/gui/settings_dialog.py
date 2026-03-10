@@ -84,18 +84,14 @@ class SettingsDialog(RoundedDialog):
         model_group.setLayout(model_layout)
         layout.addWidget(model_group)
 
-        # Audio Devices
-        audio_group = QGroupBox("Audio Devices")
+        # Audio Device
+        audio_group = QGroupBox("Audio Device")
         audio_layout = QFormLayout()
         audio_layout.setVerticalSpacing(4)
 
         self.mic_combo = _NoWheelComboBox()
         self._populate_mic_devices()
         audio_layout.addRow("Microphone:", self.mic_combo)
-
-        self.system_combo = _NoWheelComboBox()
-        self._populate_system_devices()
-        audio_layout.addRow("System audio:", self.system_combo)
 
         audio_group.setLayout(audio_layout)
         layout.addWidget(audio_group)
@@ -109,7 +105,7 @@ class SettingsDialog(RoundedDialog):
         profile_col = QVBoxLayout()
         profile_col.setSpacing(2)
         profile_col.addWidget(self.name_edit)
-        profile_desc = QLabel("Shown as your speaker label in transcripts (instead of \"You\").")
+        profile_desc = QLabel("Your name (for future speaker identification features).")
         profile_desc.setStyleSheet(f"color: rgba(255, 255, 255, 140); font-size: 11px;")
         profile_col.addWidget(profile_desc)
         profile_layout.addRow("Name:", profile_col)
@@ -130,44 +126,6 @@ class SettingsDialog(RoundedDialog):
         bug_layout.addLayout(bug_btn_row)
         bug_group.setLayout(bug_layout)
         layout.addWidget(bug_group)
-
-        # Debug
-        debug_group = QGroupBox("Debug")
-        debug_layout = QVBoxLayout()
-        debug_layout.setSpacing(4)
-
-        self.debug_master_cb = QCheckBox("Enable Debug Mode")
-        debug_layout.addWidget(self.debug_master_cb)
-        debug_master_desc = QLabel("Enables advanced diagnostic features for troubleshooting.")
-        debug_master_desc.setStyleSheet("color: rgba(255, 255, 255, 140); font-size: 11px;")
-        debug_layout.addWidget(debug_master_desc)
-
-        # Sub-options container (indented, hidden when master off)
-        self.debug_sub_widget = QWidget()
-        debug_sub_layout = QVBoxLayout()
-        debug_sub_layout.setContentsMargins(20, 4, 0, 0)
-        debug_sub_layout.setSpacing(4)
-
-        self.echo_diag_cb = QCheckBox("Echo Diagnostics")
-        debug_sub_layout.addWidget(self.echo_diag_cb)
-        echo_diag_desc = QLabel("Saves WAV audio chunks to .cadence/echo_debug/ for analysis.")
-        echo_diag_desc.setStyleSheet("color: rgba(255, 255, 255, 140); font-size: 11px;")
-        debug_sub_layout.addWidget(echo_diag_desc)
-
-        self.echo_log_cb = QCheckBox("Echo Gate Logging")
-        debug_sub_layout.addWidget(self.echo_log_cb)
-        echo_log_desc = QLabel("Verbose energy gate logging (mic/sys RMS, ratio, suppression).")
-        echo_log_desc.setStyleSheet("color: rgba(255, 255, 255, 140); font-size: 11px;")
-        debug_sub_layout.addWidget(echo_log_desc)
-
-        self.debug_sub_widget.setLayout(debug_sub_layout)
-        debug_layout.addWidget(self.debug_sub_widget)
-
-        debug_group.setLayout(debug_layout)
-        layout.addWidget(debug_group)
-
-        # Wire master toggle
-        self.debug_master_cb.toggled.connect(self._on_debug_toggled)
 
         # Buttons
         btn_layout = QHBoxLayout()
@@ -206,7 +164,7 @@ class SettingsDialog(RoundedDialog):
         return card, val_lbl
 
     def _setup_metrics(self, grid):
-        """Populate the 2x4 metrics grid."""
+        """Populate the metrics grid."""
         metrics = self.session_manager.get_metrics()
 
         # Format duration
@@ -225,12 +183,10 @@ class SettingsDialog(RoundedDialog):
             (str(metrics["recordings_this_week"]), "This Week"),
             (fmt_dur(metrics["avg_duration_s"]), "Avg Duration"),
             (f"{metrics['avg_words']:,}", "Avg Words"),
-            (f"{metrics['you_words']:,}", "Your Words"),
-            (f"{metrics['speaker_words']:,}", "Speaker Words"),
         ]
 
         for i, (value, label) in enumerate(cards):
-            row, col = divmod(i, 4)
+            row, col = divmod(i, 3)
             card, val_lbl = self._make_metric_card(value, label)
             self._metric_labels[label] = val_lbl
             grid.addWidget(card, row, col)
@@ -307,22 +263,10 @@ class SettingsDialog(RoundedDialog):
         url = f"https://github.com/whorne89/Cadence/issues/new?title={title}&body={encoded_body}"
         webbrowser.open(url)
 
-    def _on_debug_toggled(self, checked):
-        """Show/hide debug sub-options and reset checkboxes when disabled."""
-        self.debug_sub_widget.setVisible(checked)
-        if not checked:
-            self.echo_diag_cb.setChecked(False)
-            self.echo_log_cb.setChecked(False)
-
     def _populate_mic_devices(self):
         self.mic_combo.addItem("Auto-detect", None)
         for dev in self.audio_recorder.list_mic_devices():
             self.mic_combo.addItem(dev['name'], dev['index'])
-
-    def _populate_system_devices(self):
-        self.system_combo.addItem("Auto-detect", None)
-        for dev in self.audio_recorder.list_system_devices():
-            self.system_combo.addItem(dev['name'], dev['index'])
 
     def _load_current_settings(self):
         streaming = self.config.get_streaming_model_size()
@@ -336,20 +280,7 @@ class SettingsDialog(RoundedDialog):
             if idx >= 0:
                 self.mic_combo.setCurrentIndex(idx)
 
-        system_device = self.config.get_system_device()
-        if system_device is not None:
-            idx = self.system_combo.findData(system_device)
-            if idx >= 0:
-                self.system_combo.setCurrentIndex(idx)
-
         self.name_edit.setText(self.config.get_first_name())
-
-        # Debug settings
-        debug_enabled = self.config.is_debug_enabled()
-        self.debug_master_cb.setChecked(debug_enabled)
-        self.debug_sub_widget.setVisible(debug_enabled)
-        self.echo_diag_cb.setChecked(self.config.is_echo_debug_enabled())
-        self.echo_log_cb.setChecked(self.config.is_echo_gate_logging_enabled())
 
     def _save_settings(self):
         changes = []
@@ -364,31 +295,10 @@ class SettingsDialog(RoundedDialog):
             changes.append(f"Microphone: {self.mic_combo.currentText()}")
         self.config.set("audio", "mic_device_index", value=new_mic)
 
-        new_sys = self.system_combo.currentData()
-        if new_sys != self.config.get_system_device():
-            changes.append(f"System audio: {self.system_combo.currentText()}")
-        self.config.set("audio", "system_device_index", value=new_sys)
-
         new_name = self.name_edit.text().strip()
         if new_name != self.config.get_first_name():
             changes.append(f"Name: {new_name or '(cleared)'}")
         self.config.set("user", "first_name", value=new_name)
-
-        # Debug settings
-        new_debug = self.debug_master_cb.isChecked()
-        if new_debug != self.config.is_debug_enabled():
-            changes.append(f"Debug Mode: {'On' if new_debug else 'Off'}")
-        self.config.set("debug", "enabled", value=new_debug)
-
-        new_echo_diag = self.echo_diag_cb.isChecked()
-        if new_echo_diag != self.config.is_echo_debug_enabled():
-            changes.append(f"Echo Diagnostics: {'On' if new_echo_diag else 'Off'}")
-        self.config.set("debug", "echo_diagnostics", value=new_echo_diag)
-
-        new_echo_log = self.echo_log_cb.isChecked()
-        if new_echo_log != self.config.is_echo_gate_logging_enabled():
-            changes.append(f"Echo Gate Logging: {'On' if new_echo_log else 'Off'}")
-        self.config.set("debug", "echo_gate_logging", value=new_echo_log)
 
         self.config.save()
         self.settings_changed.emit()

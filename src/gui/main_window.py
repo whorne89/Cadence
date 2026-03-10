@@ -221,7 +221,6 @@ class MainWindow(QWidget):
     transcript_deleted = Signal(str, str)
     transcript_moved = Signal(str, str, str)
     sort_order_changed = Signal(bool)  # True = descending (newest first)
-    speaker_name_changed = Signal(str, str)  # filepath, new_name
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -427,25 +426,6 @@ class MainWindow(QWidget):
         rl.setContentsMargins(0, 0, 0, 0)
         rl.setSpacing(0)
 
-        # Speaker name header
-        speaker_row = QHBoxLayout()
-        speaker_row.setContentsMargins(4, 2, 4, 2)
-        self.speaker_name_btn = QPushButton("Speaker (click to name)")
-        self.speaker_name_btn.setFont(QFont("Calibri", 9))
-        self.speaker_name_btn.setToolTip("Click to rename the other speaker")
-        self.speaker_name_btn.setStyleSheet(
-            f"QPushButton {{ background-color:{BG_SURFACE}; border:1px solid {BORDER}; "
-            f"border-radius:4px; color:{TEXT_SECONDARY}; "
-            f"text-align:left; padding:3px 8px; }}"
-            f"QPushButton:hover {{ border-color:{ACCENT}; color:{ACCENT}; }}"
-        )
-        self.speaker_name_btn.clicked.connect(self._on_speaker_name_clicked)
-        speaker_row.addWidget(self.speaker_name_btn)
-        speaker_row.addStretch()
-        rl.addLayout(speaker_row)
-
-        self._current_transcript_path = None
-
         self.transcript_area = QTextEdit()
         self.transcript_area.setReadOnly(True)
         self.transcript_area.setFont(QFont("Calibri", 11))
@@ -627,24 +607,15 @@ class MainWindow(QWidget):
 
     # ── Transcript display ───────────────────────────────────────
 
-    def set_speaker_labels(self, you_label="You", them_label="Speaker"):
-        """Set the display labels for speakers."""
-        self._you_label = you_label
-        self._them_label = them_label
-
-    def append_segment(self, speaker, text, timestamp=0.0):
+    def append_segment(self, text, timestamp=0.0):
         cursor = self.transcript_area.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.End)
-        if speaker == "you":
-            label, color = getattr(self, '_you_label', 'You'), ACCENT
-        else:
-            label, color = getattr(self, '_them_label', 'Speaker'), "#e74c3c"
         mins = int(timestamp) // 60
         secs = int(timestamp) % 60
         ts_str = f"{mins:02d}:{secs:02d}"
         cursor.insertHtml(
             f'<span style="color:{TEXT_SECONDARY}; font-size:10px">[{ts_str}]</span> '
-            f'<b style="color:{color}">{label}:</b> {text}<br>'
+            f'{text}<br>'
         )
         self.transcript_area.setTextCursor(cursor)
         self.transcript_area.ensureCursorVisible()
@@ -654,44 +625,12 @@ class MainWindow(QWidget):
         self._current_segments = list(segments)
         self.transcript_area.clear()
         for seg in segments:
-            self.append_segment(seg["speaker"], seg["text"], seg.get("start", 0.0))
+            self.append_segment(seg["text"], seg.get("start", 0.0))
 
     def _update_word_count(self):
         text_content = self.transcript_area.toPlainText()
         word_count = len(text_content.split()) if text_content.strip() else 0
         self.info_label.setText(f"{word_count} words")
-
-    def set_transcript_meta(self, filepath, speaker_name=""):
-        """Set metadata for the currently displayed transcript."""
-        self._current_transcript_path = filepath
-        self.speaker_name_btn.setText(f"Speaker: {speaker_name}" if speaker_name else "Speaker (click to name)")
-        # Set per-transcript them label (reset to default if no name)
-        new_label = speaker_name if speaker_name else "Speaker"
-        if getattr(self, '_them_label', 'Speaker') != new_label:
-            self._them_label = new_label
-            if self._current_segments:
-                self.set_transcript(self._current_segments)
-        else:
-            self._them_label = new_label
-
-    def _on_speaker_name_clicked(self):
-        current = self.speaker_name_btn.text()
-        # Extract existing name from button text
-        if current.startswith("Speaker: "):
-            existing = current[9:]
-        else:
-            existing = ""
-        name, ok = InputBox.getText(
-            self, "Speaker Name", "Name for the other speaker:",
-            text=existing)
-        if ok and self._current_transcript_path:
-            display = name.strip() if name.strip() else ""
-            self.speaker_name_btn.setText(f"Speaker: {display}" if display else "Speaker (click to name)")
-            # Update the "them" label and re-render transcript
-            self._them_label = display if display else "Speaker"
-            if hasattr(self, '_current_segments') and self._current_segments:
-                self.set_transcript(self._current_segments)
-            self.speaker_name_changed.emit(self._current_transcript_path, name.strip())
 
     # ── Clear / Copy ─────────────────────────────────────────────
 

@@ -7,6 +7,7 @@ import sys
 import ctypes
 import logging
 import time
+import re
 
 from PySide6.QtWidgets import QApplication
 from PySide6.QtCore import QObject, Signal, QThread, Qt
@@ -29,7 +30,6 @@ from gui.system_tray import SystemTrayIcon
 from gui.main_window import MainWindow
 from gui.settings_dialog import SettingsDialog
 from gui.theme import apply_theme
-from core.echo_diagnostics import EchoDiagnostics
 from utils.config import ConfigManager
 from utils.logger import setup_logger
 
@@ -41,70 +41,50 @@ class TranscriptionWorker(QObject):
     """
     Worker that transcribes audio using energy-based silence detection.
 
-    Instead of a fixed timer, polls for new audio every 200ms and uses
-    RMS energy to detect speech pauses. Transcribes accumulated speech
-    when silence is detected (or when max_speech_s safety valve triggers).
+    Polls for new mic audio every 200ms and uses RMS energy to detect
+    speech pauses. Transcribes accumulated speech when silence is detected
+    (or when max_speech_s safety valve triggers).
     """
 
-    segment_ready = Signal(str, str, float)  # speaker, text, timestamp_seconds
-    segment_retracted = Signal(float)  # timestamp of "you" segment to remove
+    segment_ready = Signal(str, float)  # text, timestamp_seconds
     finished = Signal()
 
     def __init__(self, transcriber, audio_recorder,
-                 mic_silence_threshold=0.005, sys_silence_threshold=0.01,
-                 mic_min_silence_ms=400, sys_min_silence_ms=500,
-                 mic_min_speech_s=0.3, sys_min_speech_s=0.5,
-                 max_speech_s=30.0, echo_diagnostics=None,
-                 language=None, echo_gate_logging=False):
+                 silence_threshold=0.005, min_silence_ms=400,
+                 min_speech_s=0.3, max_speech_s=30.0,
+                 language=None):
         super().__init__()
         self.transcriber = transcriber
         self.audio_recorder = audio_recorder
-        self.mic_silence_threshold = mic_silence_threshold
-        self.sys_silence_threshold = sys_silence_threshold
-        self.mic_min_silence_ms = mic_min_silence_ms
-        self.sys_min_silence_ms = sys_min_silence_ms
-        self.mic_min_speech_s = mic_min_speech_s
-        self.sys_min_speech_s = sys_min_speech_s
+        self.silence_threshold = silence_threshold
+        self.min_silence_ms = min_silence_ms
+        self.min_speech_s = min_speech_s
         self.max_speech_s = max_speech_s
-        self.echo_diagnostics = echo_diagnostics
         self.language = language
-        self.echo_gate_logging = echo_gate_logging
         self._running = False
         self._poll_interval = 0.2  # 200ms
-        # Buffers for text-based echo filtering (both directions)
-        self._recent_them = []  # list of (timestamp, text)
-        self._recent_you = []   # list of (timestamp, text) — for retroactive filtering
 
     def run(self):
         """Main loop — polls audio and transcribes on silence boundaries."""
         self._running = True
         sr = self.audio_recorder.sample_rate
 
-        # Track offsets into frame lists
+        # Track offset into frame list
         mic_offset = 0
-        sys_offset = 0
 
-        # Per-source silence detectors (mic is more sensitive to capture short utterances)
         from core.silence_detector import SilenceDetector
-        from core.echo_gate import get_audio_for_sample_range
-        mic_detector = SilenceDetector(self.mic_silence_threshold, self.mic_min_silence_ms, sr)
-        sys_detector = SilenceDetector(self.sys_silence_threshold, self.sys_min_silence_ms, sr)
+        detector = SilenceDetector(self.silence_threshold, self.min_silence_ms, sr)
 
-        # Per-source speech buffer start indices
-        mic_speech_start = 0
-        sys_speech_start = 0
+        # Speech buffer start index
+        speech_start = 0
 
-        # Initialize frame references before loop (avoids NameError if loop never runs)
         mic_frames = self.audio_recorder._mic_frames
-        sys_frames = self.audio_recorder._system_frames
 
         logger.info(
             f"Transcription worker started ("
-            f"mic: threshold={self.mic_silence_threshold}, silence={self.mic_min_silence_ms}ms, "
-            f"min_speech={self.mic_min_speech_s}s | "
-            f"sys: threshold={self.sys_silence_threshold}, silence={self.sys_min_silence_ms}ms, "
-            f"min_speech={self.sys_min_speech_s}s | "
-            f"max_speech={self.max_speech_s}s, language={self.language})"
+            f"threshold={self.silence_threshold}, silence={self.min_silence_ms}ms, "
+            f"min_speech={self.min_speech_s}s, max_speech={self.max_speech_s}s, "
+            f"language={self.language})"
         )
 
         while self._running:
@@ -112,182 +92,47 @@ class TranscriptionWorker(QObject):
             if not self._running:
                 break
 
-            # --- Process mic audio ---
             mic_frames = self.audio_recorder._mic_frames
             mic_len = len(mic_frames)
             if mic_len > mic_offset:
                 new_frames = mic_frames[mic_offset:mic_len]
                 for frame in new_frames:
-                    mic_detector.feed(frame)
+                    detector.feed(frame)
                 mic_offset = mic_len
 
-                speech_frames = mic_frames[mic_speech_start:mic_offset]
+                speech_frames = mic_frames[speech_start:mic_offset]
                 speech_samples = sum(len(f) for f in speech_frames)
                 speech_duration = speech_samples / sr
 
                 should_transcribe = (
-                    mic_detector.is_silent() and mic_detector._has_had_speech
-                    and speech_duration > self.mic_min_speech_s
+                    detector.is_silent() and detector._has_had_speech
+                    and speech_duration > self.min_speech_s
                 ) or (
                     speech_duration >= self.max_speech_s
                 )
 
                 if should_transcribe:
-                    mic_start_sample = sum(len(f) for f in mic_frames[:mic_speech_start])
-                    timestamp = mic_start_sample / sr
+                    start_sample = sum(len(f) for f in mic_frames[:speech_start])
+                    timestamp = start_sample / sr
 
-                    # Echo gate: suppress mic if it's just speaker bleed
-                    # Speaker bleed is much quieter than direct speech into mic.
-                    # If system audio is active and mic isn't significantly louder,
-                    # it's just bleed — suppress it.
-                    echo_detected = False
-                    mic_audio = np.concatenate(speech_frames)
-                    mic_end_sample = mic_start_sample + len(mic_audio)
-                    sys_audio = get_audio_for_sample_range(
-                        self.audio_recorder._system_frames,
-                        mic_start_sample, mic_end_sample,
-                    )
-                    if len(sys_audio) > 0:
-                        sys_rms = float(np.sqrt(np.mean(sys_audio.astype(np.float64) ** 2)))
-                        mic_rms = float(np.sqrt(np.mean(mic_audio.astype(np.float64) ** 2)))
-                        if sys_rms > 0.005:
-                            # Two-tier echo gate:
-                            # 1) Normal bleed: ratio < 1.5 and mic_rms < 0.014
-                            #    catches ~95% of bleed (mic_rms stays below 0.013)
-                            # 2) Loud-system bleed: when sys_rms > 0.030, louder
-                            #    system audio produces proportionally louder bleed
-                            #    (mic_rms 0.014-0.020). Safe to raise the floor
-                            #    when ratio is low (< 0.65), confirming bleed pattern.
-                            ratio = mic_rms / sys_rms if sys_rms > 0 else float('inf')
-                            echo_detected = (
-                                (ratio < 1.5 and mic_rms < 0.014) or
-                                (ratio < 0.65 and mic_rms < 0.020 and sys_rms > 0.030)
-                            )
-                            if self.echo_gate_logging:
-                                logger.info(
-                                    f"Echo gate at {timestamp:.1f}s: "
-                                    f"mic_rms={mic_rms:.4f}, sys_rms={sys_rms:.4f}, "
-                                    f"ratio={ratio:.2f}, suppressed={echo_detected}"
-                                )
-                            if self.echo_diagnostics:
-                                self.echo_diagnostics.record_chunk(
-                                    mic_audio, sys_audio,
-                                    mic_rms, sys_rms, ratio,
-                                    echo_detected, timestamp,
-                                )
-
-                    # Tier 3: audio envelope correlation
-                    # Catches echo that energy gate misses when Whisper
-                    # transcribes different words per channel (text match fails).
-                    if not echo_detected and len(sys_audio) > 0:
-                        from core.echo_gate import is_echo
-                        audio_is_echo, correlation = is_echo(
-                            mic_audio, sys_audio, threshold=0.7, detail=True
-                        )
-                        if audio_is_echo and mic_rms < 0.020:
-                            echo_detected = True
-                            if self.echo_gate_logging:
-                                logger.info(
-                                    f"Echo gate (envelope) at {timestamp:.1f}s: "
-                                    f"correlation={correlation:.2f}, "
-                                    f"mic_rms={mic_rms:.4f}, suppressed=True"
-                                )
-
-                    if echo_detected:
-                        logger.info(f"Echo suppressed at {timestamp:.1f}s (energy gate)")
-                    else:
-                        # Energy gate passed — transcribe, then text-compare
-                        text = self._transcribe_audio(speech_frames)
-                        if text:
-                            is_echo, recovered = self._is_text_echo(text, timestamp)
-                            if is_echo and recovered is None:
-                                logger.info(
-                                    f"Echo suppressed at {timestamp:.1f}s "
-                                    f"(text match with 'them')"
-                                )
-                            else:
-                                emit_text = recovered if is_echo else text
-                                self._recent_you.append((timestamp, emit_text))
-                                # Keep only last 90 seconds of "you" text
-                                cutoff = timestamp - 90.0
-                                self._recent_you = [
-                                    (t, tx) for t, tx in self._recent_you if t > cutoff
-                                ]
-                                self.segment_ready.emit("you", emit_text, timestamp)
-
-                    mic_speech_start = mic_offset
-                    mic_detector.reset()
-                elif mic_detector.is_silent() and not mic_detector._has_had_speech:
-                    # Pure silence — skip ahead without transcribing
-                    mic_speech_start = mic_offset
-                    mic_detector.reset()
-
-            # --- Process system audio ---
-            sys_frames = self.audio_recorder._system_frames
-            sys_len = len(sys_frames)
-            if sys_len > sys_offset:
-                new_frames = sys_frames[sys_offset:sys_len]
-                for frame in new_frames:
-                    sys_detector.feed(frame)
-                sys_offset = sys_len
-
-                speech_frames = sys_frames[sys_speech_start:sys_offset]
-                speech_samples = sum(len(f) for f in speech_frames)
-                speech_duration = speech_samples / sr
-
-                should_transcribe = (
-                    sys_detector.is_silent() and sys_detector._has_had_speech
-                    and speech_duration > self.sys_min_speech_s
-                ) or (
-                    speech_duration >= self.max_speech_s
-                )
-
-                if should_transcribe:
-                    prev_samples = sum(len(f) for f in sys_frames[:sys_speech_start])
-                    timestamp = prev_samples / sr
                     text = self._transcribe_audio(speech_frames)
                     if text:
-                        self._recent_them.append((timestamp, text))
-                        # Keep only last 90 seconds of "them" text
-                        cutoff = timestamp - 90.0
-                        self._recent_them = [
-                            (t, tx) for t, tx in self._recent_them if t > cutoff
-                        ]
-                        self.segment_ready.emit("them", text, timestamp)
-                        # Retroactive check: retract "you" segments that match
-                        self._retract_echo_you(text, timestamp)
-                    sys_speech_start = sys_offset
-                    sys_detector.reset()
-                elif sys_detector.is_silent() and not sys_detector._has_had_speech:
-                    # Pure silence — skip ahead without transcribing
-                    sys_speech_start = sys_offset
-                    sys_detector.reset()
+                        self.segment_ready.emit(text, timestamp)
 
-        # --- Flush remaining audio when stopping ---
-        # Flush system FIRST so _recent_them is populated for mic text gate
-        sys_remaining = sys_frames[sys_speech_start:sys_offset] if sys_offset > sys_speech_start else []
-        if sys_remaining:
-            prev_samples = sum(len(f) for f in sys_frames[:sys_speech_start])
-            timestamp = prev_samples / sr
-            text = self._transcribe_audio(sys_remaining)
-            if text:
-                self._recent_them.append((timestamp, text))
-                self.segment_ready.emit("them", text, timestamp)
-                self._retract_echo_you(text, timestamp)
+                    speech_start = mic_offset
+                    detector.reset()
+                elif detector.is_silent() and not detector._has_had_speech:
+                    speech_start = mic_offset
+                    detector.reset()
 
-        # Then flush mic with text echo gate
-        mic_remaining = mic_frames[mic_speech_start:mic_offset] if mic_offset > mic_speech_start else []
+        # Flush remaining audio when stopping
+        mic_remaining = mic_frames[speech_start:mic_offset] if mic_offset > speech_start else []
         if mic_remaining:
-            prev_samples = sum(len(f) for f in mic_frames[:mic_speech_start])
-            timestamp = prev_samples / sr
+            start_sample = sum(len(f) for f in mic_frames[:speech_start])
+            timestamp = start_sample / sr
             text = self._transcribe_audio(mic_remaining)
             if text:
-                is_echo, recovered = self._is_text_echo(text, timestamp)
-                if is_echo and recovered is None:
-                    logger.info(f"Echo suppressed at {timestamp:.1f}s (text match, flush)")
-                else:
-                    emit_text = recovered if is_echo else text
-                    self.segment_ready.emit("you", emit_text, timestamp)
+                self.segment_ready.emit(text, timestamp)
 
         logger.info("Transcription worker stopped")
         self.finished.emit()
@@ -304,75 +149,6 @@ class TranscriptionWorker(QObject):
             logger.error(f"Transcription error: {e}")
         return None
 
-    def _is_text_echo(self, mic_text, timestamp, time_window=30.0, overlap_threshold=0.65):
-        """
-        Check if mic text matches recent 'them' transcriptions (text-level echo gate).
-
-        Returns:
-            (is_echo, recovered_text_or_None): If echo detected but clause recovery
-            succeeds, returns (True, recovered_text). If full echo, returns (True, None).
-            If not echo, returns (False, None).
-        """
-        from core.echo_gate import _word_overlap, _extract_unique_clauses
-        for them_time, them_text in self._recent_them:
-            if abs(timestamp - them_time) <= time_window:
-                overlap = _word_overlap(mic_text, them_text)
-                if overlap >= overlap_threshold:
-                    # Try clause-level recovery
-                    combined_them = " ".join(
-                        tx for t, tx in self._recent_them
-                        if abs(timestamp - t) <= time_window
-                    )
-                    recovered = _extract_unique_clauses(mic_text, combined_them)
-                    if recovered is not None:
-                        logger.info(
-                            f"Text echo partial: {overlap:.0%} overlap with 'them' "
-                            f"at {them_time:.1f}s, recovered: '{recovered}'"
-                        )
-                        return (True, recovered)
-                    logger.info(
-                        f"Text echo: {overlap:.0%} word overlap with 'them' at {them_time:.1f}s"
-                    )
-                    return (True, None)
-        return (False, None)
-
-    def _retract_echo_you(self, them_text, them_timestamp, time_window=30.0, overlap_threshold=0.65):
-        """Retroactively retract 'you' segments that match newly transcribed 'them' text."""
-        from core.echo_gate import _word_overlap, _extract_unique_clauses
-        surviving = []
-        for you_time, you_text in self._recent_you:
-            if abs(you_time - them_timestamp) <= time_window:
-                overlap = _word_overlap(you_text, them_text)
-                if overlap >= overlap_threshold:
-                    # Try clause-level recovery before full retraction
-                    recovered = _extract_unique_clauses(you_text, them_text)
-                    if recovered is not None:
-                        logger.info(
-                            f"Retroactive echo partial: 'you' at {you_time:.1f}s "
-                            f"recovered: '{recovered}'"
-                        )
-                        # Retract old segment, emit recovered text
-                        self.segment_retracted.emit(you_time)
-                        self.segment_ready.emit("you", recovered, you_time)
-                        surviving.append((you_time, recovered))
-                    else:
-                        logger.info(
-                            f"Retroactive echo retraction: 'you' at {you_time:.1f}s "
-                            f"matches 'them' at {them_timestamp:.1f}s ({overlap:.0%} overlap)"
-                        )
-                        self.segment_retracted.emit(you_time)
-                    continue
-            surviving.append((you_time, you_text))
-        self._recent_you = surviving
-
-    def _transcribe_frames(self, frames, speaker, timestamp):
-        """Concatenate frames and transcribe (used for flush on stop)."""
-        text = self._transcribe_audio(frames)
-        if text:
-            if speaker == "them":
-                self._recent_them.append((timestamp, text))
-            self.segment_ready.emit(speaker, text, timestamp)
-
     def stop(self):
         self._running = False
 
@@ -386,12 +162,8 @@ def _filter_hallucinations(segments):
     - ASCII foreign language text (low English vocabulary coverage)
     - Filler-only segments (just "um", "the", "so", etc.)
     """
-    import re
     FILLER_WORDS = {"um", "uh", "the", "a", "so", "and", "but", "or", "like"}
 
-    # Top ~150 most common English words — covers ~80% of typical speech.
-    # Used to detect ASCII-alphabet foreign languages (Dutch, German, etc.)
-    # that bypass the non-ASCII character filter.
     COMMON_ENGLISH = {
         "i", "you", "he", "she", "it", "we", "they", "me", "him", "her", "us",
         "them", "my", "your", "his", "its", "our", "their", "mine", "yours",
@@ -440,11 +212,7 @@ def _filter_hallucinations(segments):
             logger.info(f"Filler filtered: '{text}'")
             continue
 
-        # Check for ASCII foreign language: if segment has 4+ words and zero
-        # match common English vocabulary, it's almost certainly not English.
-        # Real English speech always has at least some function words (the,
-        # is, for, with, etc.) even in domain-heavy sentences. Foreign
-        # language text (Dutch, German, etc.) scores 0 matches.
+        # Check for ASCII foreign language
         if len(clean) >= 4:
             english_count = sum(1 for w in clean if w in COMMON_ENGLISH)
             if english_count == 0:
@@ -456,67 +224,76 @@ def _filter_hallucinations(segments):
     return filtered
 
 
+def merge_segments(segments, max_gap_s=2.0):
+    """
+    Merge consecutive segments that are close in time.
+
+    Improves readability by combining fragments that were split by
+    the batch polling window into natural utterances.
+    """
+    if not segments:
+        return segments
+
+    merged = [dict(segments[0])]
+    last_merge_start = segments[0]["start"]
+
+    for seg in segments[1:]:
+        prev = merged[-1]
+        if seg["start"] - last_merge_start <= max_gap_s:
+            prev["text"] = prev["text"].rstrip() + " " + seg["text"].lstrip()
+            last_merge_start = seg["start"]
+        else:
+            merged.append(dict(seg))
+            last_merge_start = seg["start"]
+
+    return merged
+
+
 class PostProcessWorker(QObject):
     """
     Post-processes audio after recording stops.
 
-    Keeps live "you" segments (already echo-gate filtered) and only
-    re-transcribes system audio for cleaner "them" segments. This avoids
-    re-introducing speaker bleed that the echo gate already rejected.
+    Re-transcribes the full mic recording for better quality,
+    filters hallucinations, and merges consecutive segments.
     """
 
-    segments_ready = Signal(list)  # list of {speaker, text, start} dicts
+    segments_ready = Signal(list)  # list of {text, start} dicts
     progress = Signal(str)  # status message
     finished = Signal()
 
-    def __init__(self, transcriber, live_segments, system_audio, language=None):
+    def __init__(self, transcriber, mic_audio, language=None):
         super().__init__()
         self.transcriber = transcriber
-        self.live_segments = live_segments
-        self.system_audio = system_audio
+        self.mic_audio = mic_audio
         self.language = language
 
     def run(self):
-        """Merge live 'you' segments with re-transcribed system audio."""
+        """Re-transcribe full recording for cleaner output."""
         segments = []
 
         try:
-            # Keep live "you" segments (already echo-gate filtered)
-            for seg in self.live_segments:
-                if seg.get("speaker") == "you":
-                    segments.append({
-                        "speaker": "you",
-                        "text": seg["text"],
-                        "start": seg["start"],
-                    })
+            if len(self.mic_audio) > 0:
+                self.progress.emit("Processing audio...")
 
-            # Re-transcribe system audio for cleaner "them" segments
-            if len(self.system_audio) > 0:
-                self.progress.emit("Processing system audio...")
-                def sys_progress(p):
+                def on_progress(p):
                     pct = int(p * 100)
-                    self.progress.emit(f"Processing system audio... {pct}%")
-                sys_segments = self.transcriber.transcribe(
-                    self.system_audio, language=self.language,
-                    progress_callback=sys_progress,
+                    self.progress.emit(f"Processing audio... {pct}%")
+
+                raw_segments = self.transcriber.transcribe(
+                    self.mic_audio, language=self.language,
+                    progress_callback=on_progress,
                 )
-                for seg in sys_segments:
+                for seg in raw_segments:
                     segments.append({
-                        "speaker": "them",
                         "text": seg["text"],
                         "start": seg["start"],
                     })
 
-            # Sort by timestamp, then remove echo duplicates (safety net)
-            segments.sort(key=lambda s: s["start"])
-            from core.echo_gate import deduplicate_segments, merge_segments
-            segments = deduplicate_segments(segments)
+                # Filter hallucinations
+                segments = _filter_hallucinations(segments)
 
-            # Filter hallucinations (non-English output, filler-only segments)
-            segments = _filter_hallucinations(segments)
-
-            # Merge consecutive same-speaker segments for readability
-            segments = merge_segments(segments)
+                # Merge consecutive segments for readability
+                segments = merge_segments(segments)
 
         except Exception as e:
             logger.error(f"Post-processing error: {e}")
@@ -541,16 +318,13 @@ class CadenceApp(QObject):
         # Session management
         self.session_manager = SessionManager()
 
-        # Audio recorder — no callback, just records
+        # Audio recorder — single mic stream
         self.audio_recorder = AudioRecorder()
 
-        # Apply saved audio device settings
+        # Apply saved mic device setting
         mic_device = self.config.get_mic_device()
         if mic_device is not None:
             self.audio_recorder.set_mic_device(mic_device)
-        system_device = self.config.get_system_device()
-        if system_device is not None:
-            self.audio_recorder.set_system_device(system_device)
 
         # Streaming transcriber (lightweight model for real-time)
         streaming_model_size = self.config.get_streaming_model_size()
@@ -571,37 +345,19 @@ class CadenceApp(QObject):
         self._postprocess_thread = None
         self._postprocess_worker = None
         self._recording_duration = 0.0
-        self._pending_system_audio = None
-
-        # Echo diagnostics (developer debug tool)
-        self.echo_diagnostics = EchoDiagnostics(
-            enabled=self.config.is_echo_debug_enabled()
-        )
+        self._pending_mic_audio = None
 
         self.logger.info("Application initialized")
 
-    def _on_segment(self, speaker, text, timestamp):
+    def _on_segment(self, text, timestamp):
         """
         Handle a transcript segment from the transcription worker.
         Called on the main thread via Qt signal (thread-safe).
         """
-        segment = {"speaker": speaker, "text": text, "start": timestamp}
+        segment = {"text": text, "start": timestamp}
         self._current_segments.append(segment)
         if self.main_window is not None:
-            self.main_window.append_segment(speaker, text, timestamp)
-
-    def _on_segment_retracted(self, timestamp):
-        """
-        Remove a 'you' segment that was retroactively identified as echo.
-        Called when system audio transcription reveals a matching 'you' segment.
-        """
-        self.logger.info(f"Retracting 'you' segment at {timestamp:.1f}s (echo)")
-        self._current_segments = [
-            s for s in self._current_segments
-            if not (s["speaker"] == "you" and s["start"] == timestamp)
-        ]
-        if self.main_window is not None:
-            self.main_window.set_transcript(self._current_segments)
+            self.main_window.append_segment(text, timestamp)
 
     def start_recording(self):
         """Start a new recording session."""
@@ -612,9 +368,6 @@ class CadenceApp(QObject):
 
         # Start audio capture
         self.audio_recorder.start_recording()
-
-        # Start echo diagnostics session if enabled
-        self.echo_diagnostics.start_session()
 
         # Start transcription worker in a QThread
         self._start_transcription_worker()
@@ -633,32 +386,24 @@ class CadenceApp(QObject):
 
     def _start_transcription_worker(self):
         """Launch the transcription worker in a background QThread."""
-        # Clean up any previous worker
         self._stop_transcription_worker()
 
         self._transcription_thread = QThread()
         language = self.config.get("whisper", "language", default="en")
-        echo_gate_logging = self.config.is_echo_gate_logging_enabled()
         self._transcription_worker = TranscriptionWorker(
             self.streaming_transcriber,
             self.audio_recorder,
-            mic_silence_threshold=0.005,
-            sys_silence_threshold=0.01,
-            mic_min_silence_ms=400,
-            sys_min_silence_ms=500,
-            mic_min_speech_s=0.3,
-            sys_min_speech_s=0.5,
+            silence_threshold=0.005,
+            min_silence_ms=400,
+            min_speech_s=0.3,
             max_speech_s=30.0,
-            echo_diagnostics=self.echo_diagnostics,
             language=language,
-            echo_gate_logging=echo_gate_logging,
         )
         self._transcription_worker.moveToThread(self._transcription_thread)
 
         # Connect signals
         self._transcription_thread.started.connect(self._transcription_worker.run)
         self._transcription_worker.segment_ready.connect(self._on_segment)
-        self._transcription_worker.segment_retracted.connect(self._on_segment_retracted)
         self._transcription_worker.finished.connect(
             self._on_transcription_finished, Qt.ConnectionType.QueuedConnection
         )
@@ -685,23 +430,20 @@ class CadenceApp(QObject):
             self._transcription_worker = None
 
     def _on_transcription_finished(self):
-        """Called when the transcription worker finishes (including flushing remaining audio)."""
+        """Called when the transcription worker finishes."""
         self._cleanup_transcription_thread()
-        # If we're stopping a recording, start post-processing now
-        if self._pending_system_audio is not None:
+        if self._pending_mic_audio is not None:
             self._begin_postprocess()
 
     def _begin_postprocess(self):
         """Start post-processing after the transcription worker has fully stopped."""
-        system_audio = self._pending_system_audio
-        self._pending_system_audio = None
-
-        self.echo_diagnostics.save_live_transcript(self._current_segments)
+        mic_audio = self._pending_mic_audio
+        self._pending_mic_audio = None
 
         if self.main_window is not None:
             self.main_window.set_processing_state("Cleaning up transcript...")
 
-        self._start_postprocess(None, system_audio)
+        self._start_postprocess(mic_audio)
 
     def stop_recording(self):
         """Stop recording and launch post-processing after worker finishes."""
@@ -711,12 +453,12 @@ class CadenceApp(QObject):
         if self._transcription_worker is not None:
             self._transcription_worker.stop()
 
-        # Stop audio capture — returns full audio arrays
-        _, system_audio = self.audio_recorder.stop_recording()
+        # Stop audio capture — returns full audio array
+        mic_audio = self.audio_recorder.stop_recording()
         self._recording_duration = self.audio_recorder.get_duration()
 
-        # Store system audio; post-processing starts when worker emits finished
-        self._pending_system_audio = system_audio
+        # Store mic audio; post-processing starts when worker emits finished
+        self._pending_mic_audio = mic_audio
 
         # Update UI
         if self.main_window is not None:
@@ -726,12 +468,12 @@ class CadenceApp(QObject):
         if self._transcription_thread is None or not self._transcription_thread.isRunning():
             self._begin_postprocess()
 
-    def _start_postprocess(self, mic_audio, system_audio):
+    def _start_postprocess(self, mic_audio):
         """Launch PostProcessWorker in a background QThread."""
         self._postprocess_thread = QThread()
         language = self.config.get("whisper", "language", default="en")
         self._postprocess_worker = PostProcessWorker(
-            self.streaming_transcriber, list(self._current_segments), system_audio,
+            self.streaming_transcriber, mic_audio,
             language=language,
         )
         self._postprocess_worker.moveToThread(self._postprocess_thread)
@@ -756,10 +498,6 @@ class CadenceApp(QObject):
         if not segments and self._current_segments:
             self.logger.warning("Post-processing returned empty; keeping live transcript")
             segments = self._current_segments
-
-        # Save post-processed transcript and finish diagnostics session
-        self.echo_diagnostics.save_postprocessed_transcript(segments)
-        self.echo_diagnostics.finish_session()
 
         # Replace live segments with cleaned version
         self._current_segments = segments
@@ -830,35 +568,14 @@ class CadenceApp(QObject):
         """Apply updated settings from the dialog."""
         self.logger.info("Settings changed - applying updates")
 
-        # Update audio devices
+        # Update mic device
         mic_device = self.config.get_mic_device()
         self.audio_recorder.set_mic_device(mic_device)
-        system_device = self.config.get_system_device()
-        self.audio_recorder.set_system_device(system_device)
 
         # Update streaming model
         streaming_model = self.config.get_streaming_model_size()
         if streaming_model != self.streaming_transcriber.model_size:
             self.streaming_transcriber.change_model(streaming_model)
-
-        # Update echo diagnostics and logging
-        self.echo_diagnostics.enabled = self.config.is_echo_debug_enabled()
-        if self._transcription_worker is not None:
-            self._transcription_worker.echo_gate_logging = self.config.is_echo_gate_logging_enabled()
-
-        # Update speaker labels
-        self._apply_speaker_labels()
-
-    def _apply_speaker_labels(self):
-        """Update main window speaker labels from config."""
-        if self.main_window is not None:
-            first_name = self.config.get_first_name()
-            you_label = first_name if first_name else "You"
-            self.main_window.set_speaker_labels(you_label=you_label)
-
-    def _on_speaker_name_changed(self, filepath, name):
-        """Save updated speaker name to transcript file."""
-        self.session_manager.update_speaker_name(filepath, name)
 
     def on_folder_selected(self, folder_name):
         """Load and display transcripts for the selected folder."""
@@ -891,8 +608,6 @@ class CadenceApp(QObject):
                 data = self.session_manager.load_transcript(t["path"])
                 if self.main_window:
                     self.main_window.set_transcript(data["segments"])
-                    self.main_window.set_transcript_meta(
-                        t["path"], data.get("speaker_name", ""))
                 break
 
     def on_transcript_renamed(self, folder, old_name, new_name):
@@ -991,10 +706,6 @@ def main():
     main_window.transcript_moved.connect(cadence_app.on_transcript_moved)
     main_window.sort_order_changed.connect(cadence_app.on_sort_order_changed)
     main_window.settings_requested.connect(cadence_app.show_settings)
-    main_window.speaker_name_changed.connect(cadence_app._on_speaker_name_changed)
-
-    # Apply speaker labels from config
-    cadence_app._apply_speaker_labels()
 
     # Load folders on startup
     cadence_app._refresh_folders()
