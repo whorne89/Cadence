@@ -68,7 +68,7 @@ class SessionManager:
     # --- Transcript operations ---
 
     def save_transcript(self, segments, duration=0.0, model="base", folder=None,
-                        name=None):
+                        name=None, participant=""):
         """
         Save transcript as a .txt file. Returns the file path.
         Auto-creates a date folder if folder is not specified.
@@ -113,6 +113,8 @@ class SessionManager:
         lines.append(f"Date: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
         lines.append(f"Duration: {dur_str}")
         lines.append(f"Model: {model}")
+        if participant:
+            lines.append(f"Participant: {participant}")
         lines.append("")
         lines.append("---")
         lines.append("")
@@ -141,6 +143,7 @@ class SessionManager:
             "date": "",
             "duration": "",
             "model": "",
+            "participant": "",
             "segments": [],
         }
 
@@ -153,6 +156,11 @@ class SessionManager:
                     result["duration"] = line[9:].strip()
                 elif line.startswith("Model:"):
                     result["model"] = line[6:].strip()
+                elif line.startswith("Participant:"):
+                    result["participant"] = line[12:].strip()
+                elif line.startswith("Speaker:"):
+                    # Backward compat: old "Speaker:" header → participant
+                    result["participant"] = line[8:].strip()
                 elif line.strip() == "---":
                     in_header = False
                 continue
@@ -183,6 +191,44 @@ class SessionManager:
                 })
 
         return result
+
+    def update_participant(self, filepath, participant):
+        """Update the Participant header in a transcript file."""
+        p = Path(filepath)
+        if not p.exists():
+            return
+        content = p.read_text(encoding="utf-8")
+        lines = content.split("\n")
+
+        new_lines = []
+        found = False
+        for line in lines:
+            if line.startswith("Participant:") or line.startswith("Speaker:"):
+                if participant:
+                    new_lines.append(f"Participant: {participant}")
+                found = True
+            elif line.strip() == "---" and not found:
+                if participant:
+                    new_lines.append(f"Participant: {participant}")
+                new_lines.append(line)
+                found = True
+            else:
+                new_lines.append(line)
+
+        # Remove empty lines before ---
+        final = []
+        for i, line in enumerate(new_lines):
+            if line.strip() == "" and i + 1 < len(new_lines) and new_lines[i + 1].strip() == "---":
+                continue
+            final.append(line)
+        # Re-insert blank line before ---
+        result = []
+        for i, line in enumerate(final):
+            if line.strip() == "---" and i > 0 and final[i - 1].strip() != "":
+                result.append("")
+            result.append(line)
+        p.write_text("\n".join(result), encoding="utf-8")
+        logger.info(f"Participant updated to '{participant}' in {filepath}")
 
     def _parse_transcript_date(self, filepath):
         """Extract the Date header from a transcript file. Returns datetime or None."""

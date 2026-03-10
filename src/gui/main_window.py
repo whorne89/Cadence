@@ -221,6 +221,7 @@ class MainWindow(QWidget):
     transcript_deleted = Signal(str, str)
     transcript_moved = Signal(str, str, str)
     sort_order_changed = Signal(bool)  # True = descending (newest first)
+    participant_changed = Signal(str, str)  # filepath, participant_name
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -425,6 +426,25 @@ class MainWindow(QWidget):
         rl = QVBoxLayout(rp)
         rl.setContentsMargins(0, 0, 0, 0)
         rl.setSpacing(0)
+
+        # "Meeting with" header
+        participant_row = QHBoxLayout()
+        participant_row.setContentsMargins(4, 2, 4, 2)
+        self.participant_btn = QPushButton("Meeting with... (click to set)")
+        self.participant_btn.setFont(QFont("Calibri", 9))
+        self.participant_btn.setToolTip("Click to set who this meeting is with")
+        self.participant_btn.setStyleSheet(
+            f"QPushButton {{ background-color:{BG_SURFACE}; border:1px solid {BORDER}; "
+            f"border-radius:4px; color:{TEXT_SECONDARY}; "
+            f"text-align:left; padding:3px 8px; }}"
+            f"QPushButton:hover {{ border-color:{ACCENT}; color:{ACCENT}; }}"
+        )
+        self.participant_btn.clicked.connect(self._on_participant_clicked)
+        participant_row.addWidget(self.participant_btn)
+        participant_row.addStretch()
+        rl.addLayout(participant_row)
+
+        self._current_transcript_path = None
 
         self.transcript_area = QTextEdit()
         self.transcript_area.setReadOnly(True)
@@ -631,6 +651,31 @@ class MainWindow(QWidget):
         text_content = self.transcript_area.toPlainText()
         word_count = len(text_content.split()) if text_content.strip() else 0
         self.info_label.setText(f"{word_count} words")
+
+    def set_transcript_meta(self, filepath, participant=""):
+        """Set metadata for the currently displayed transcript."""
+        self._current_transcript_path = filepath
+        if participant:
+            self.participant_btn.setText(f"Meeting with {participant}")
+        else:
+            self.participant_btn.setText("Meeting with... (click to set)")
+
+    def _on_participant_clicked(self):
+        current = self.participant_btn.text()
+        if current.startswith("Meeting with ") and not current.endswith("(click to set)"):
+            existing = current[len("Meeting with "):]
+        else:
+            existing = ""
+        name, ok = InputBox.getText(
+            self, "Meeting Participant", "Who is this meeting with?",
+            text=existing)
+        if ok and self._current_transcript_path:
+            display = name.strip()
+            if display:
+                self.participant_btn.setText(f"Meeting with {display}")
+            else:
+                self.participant_btn.setText("Meeting with... (click to set)")
+            self.participant_changed.emit(self._current_transcript_path, display)
 
     # ── Clear / Copy ─────────────────────────────────────────────
 

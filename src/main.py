@@ -608,6 +608,8 @@ class CadenceApp(QObject):
                 data = self.session_manager.load_transcript(t["path"])
                 if self.main_window:
                     self.main_window.set_transcript(data["segments"])
+                    self.main_window.set_transcript_meta(
+                        t["path"], data.get("participant", ""))
                 break
 
     def on_transcript_renamed(self, folder, old_name, new_name):
@@ -624,6 +626,10 @@ class CadenceApp(QObject):
         """Move a transcript to another folder and refresh the transcript list."""
         self.session_manager.move_transcript(src_folder, name, dest_folder)
         self.on_folder_selected(src_folder)
+
+    def _on_participant_changed(self, filepath, name):
+        """Save updated participant name to transcript file."""
+        self.session_manager.update_participant(filepath, name)
 
     def on_sort_order_changed(self, descending):
         """Re-sort the transcript list when sort order changes."""
@@ -706,6 +712,7 @@ def main():
     main_window.transcript_moved.connect(cadence_app.on_transcript_moved)
     main_window.sort_order_changed.connect(cadence_app.on_sort_order_changed)
     main_window.settings_requested.connect(cadence_app.show_settings)
+    main_window.participant_changed.connect(cadence_app._on_participant_changed)
 
     # Load folders on startup
     cadence_app._refresh_folders()
