@@ -251,7 +251,7 @@ def _extract_prefix_suffix(mic_text, sys_text, overlap_threshold=0.6):
     return None
 
 
-def deduplicate_segments(segments, time_window=30.0, word_overlap_threshold=0.5,
+def deduplicate_segments(segments, time_window=45.0, word_overlap_threshold=0.5,
                          seq_match_threshold=0.4):
     """
     Remove mic segments that are echo of system audio segments.
@@ -298,9 +298,16 @@ def deduplicate_segments(segments, time_window=30.0, word_overlap_threshold=0.5,
 
         combined_sys = " ".join(s["text"] for s in nearby)
 
+        mic_words_count = len(mic_text.split())
+
         # Pass 1: Word overlap against combined nearby system text
+        # Use lower threshold for very short segments (1-4 words) —
+        # these are almost always garbled echo fragments, and even
+        # 35% word match is suspicious at that length.
+        effective_threshold = (0.35 if mic_words_count <= 4
+                               else word_overlap_threshold)
         overlap = _word_overlap(mic_text, combined_sys)
-        if overlap >= word_overlap_threshold:
+        if overlap >= effective_threshold:
             # Try clause-level recovery before full removal
             recovered = _extract_unique_clauses(mic_text, combined_sys)
             if recovered is not None:
@@ -336,7 +343,6 @@ def deduplicate_segments(segments, time_window=30.0, word_overlap_threshold=0.5,
         # from mic vs system (same audio, different text). Only applied to
         # short segments (< 6 words) where word overlap is unreliable due
         # to the small word count.
-        mic_words_count = len(mic_text.split())
         if mic_words_count < 6:
             mic_lower = mic_text.lower().strip()
             for sys_seg in nearby:

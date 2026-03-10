@@ -183,37 +183,27 @@ class TranscriptionWorker(QObject):
                     )
 
                     # --- Echo gate on RAW audio (before any AEC) ---
+                    # Calibrated from 249 chunks across 6 meetings (2026-03-02 to 03-06).
+                    # Bleed mic_rms: 0.006-0.073, ratio: 0.38-1.21
+                    # Genuine speech mic_rms: 0.085+, always pushes ratio > 1.5
+                    # Key threshold: mic_rms 0.08 cleanly separates bleed from speech
                     if len(sys_audio) > 0:
                         sys_rms = float(np.sqrt(np.mean(sys_audio.astype(np.float64) ** 2)))
                         mic_rms = float(np.sqrt(np.mean(mic_audio.astype(np.float64) ** 2)))
                         if sys_rms > 0.005:
                             ratio = mic_rms / sys_rms if sys_rms > 0 else float('inf')
-                            # Tier 1: Low mic energy + ratio confirms bleed
-                            # Tier 2: Very low ratio (mic << sys) with moderate mic
+                            # Tier 1: Bleed — ratio confirms mic is quieter than
+                            # expected for speech, mic_rms below observed speech floor
+                            # Tier 2: Very low ratio with louder bleed (loud speakers)
                             echo_detected = (
-                                (ratio < 1.5 and mic_rms < 0.040) or
-                                (ratio < 0.75 and mic_rms < 0.055 and sys_rms > 0.020)
+                                (ratio < 1.5 and mic_rms < 0.08) or
+                                (ratio < 0.65 and mic_rms < 0.15 and sys_rms > 0.015)
                             )
                             if self.echo_gate_logging:
                                 logger.info(
                                     f"Echo gate at {timestamp:.1f}s: "
                                     f"mic_rms={mic_rms:.4f}, sys_rms={sys_rms:.4f}, "
                                     f"ratio={ratio:.2f}, suppressed={echo_detected}"
-                                )
-
-                    # Tier 3: audio envelope correlation (on raw audio)
-                    if not echo_detected and len(sys_audio) > 0:
-                        from core.echo_gate import is_echo
-                        audio_is_echo, correlation = is_echo(
-                            mic_audio, sys_audio, threshold=0.7, detail=True
-                        )
-                        if audio_is_echo and mic_rms < 0.055:
-                            echo_detected = True
-                            if self.echo_gate_logging:
-                                logger.info(
-                                    f"Echo gate (envelope) at {timestamp:.1f}s: "
-                                    f"correlation={correlation:.2f}, "
-                                    f"mic_rms={mic_rms:.4f}, suppressed=True"
                                 )
 
                     # --- AEC: only clean chunks that PASSED the echo gate ---
@@ -226,7 +216,7 @@ class TranscriptionWorker(QObject):
                         aec_applied = True
 
                     # --- Post-AEC echo check ---
-                    # If AEC removed >70% of signal energy, chunk was mostly echo
+                    # If AEC removed significant signal energy, chunk was mostly echo
                     if aec_applied and raw_mic_audio is not None:
                         cleaned_rms = float(np.sqrt(np.mean(
                             mic_audio.astype(np.float64) ** 2
@@ -236,7 +226,7 @@ class TranscriptionWorker(QObject):
                         )))
                         if raw_rms > 0:
                             reduction = 1.0 - (cleaned_rms / raw_rms)
-                            if reduction > 0.70 and cleaned_rms < 0.015:
+                            if reduction > 0.50 and cleaned_rms < 0.030:
                                 echo_detected = True
                                 if self.echo_gate_logging:
                                     logger.info(
