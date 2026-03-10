@@ -1,11 +1,11 @@
 # Cadence
 
-Meeting transcription desktop app with real-time speaker attribution.
+Meeting transcription desktop app with real-time speech-to-text.
 
 ## Tech Stack
 - Python 3.12, uv, PySide6
 - faster-whisper (CPU, int8) for transcription
-- sounddevice (mic) + PyAudioWPatch (WASAPI loopback) for audio
+- sounddevice for mic capture
 - PyInstaller for building exe
 
 ## Architecture
@@ -17,7 +17,7 @@ System tray app with full window on demand. QThread for async transcription.
 - resource_path: `get_resource_path()` / `get_app_data_path()` for dev vs bundled
 - QThread + QObject worker pattern for background transcription
 - Signal/slot for cross-thread communication
-- Dual audio: mic (sounddevice) + system (WASAPI loopback via PyAudioWPatch)
+- Single mic stream via sounddevice
 
 ## Changelog & Versioning
 - **Always update `CHANGELOG.md`** when making any functional change (features, fixes, refactors).

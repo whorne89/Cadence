@@ -1,15 +1,13 @@
 # Cadence
 
-Real-time meeting transcription with speaker attribution. Records both your microphone and system audio, transcribes in real-time, and labels who said what.
+Real-time meeting transcription. Records your microphone, transcribes speech in real-time using Whisper, and saves organized transcripts.
 
 ## Features
 
 - **Real-time transcription** — Live speech-to-text during meetings using faster-whisper (CPU, int8)
-- **Dual audio capture** — Simultaneous mic + system audio (WASAPI loopback) recording
-- **Speaker attribution** — Automatic "You" vs "Speaker" labels with customizable per-transcript speaker names
-- **Multi-layer echo cancellation** — Three-tier live echo gate (energy, envelope correlation, text matching) plus post-processing dedup with clause-level recovery
 - **Post-processing** — Full-audio re-transcription after recording for higher accuracy
 - **Model selection** — Four Whisper model tiers: Fastest (tiny), Balanced (base), Accurate (small), Precision (medium)
+- **Meeting participant** — Tag transcripts with who the meeting was with
 - **Session management** — Organize transcripts in folders with date-sorted history
 - **Activity dashboard** — Session metrics: recordings, duration, word counts, weekly stats
 - **Dark theme UI** — Frameless rounded window with collapsible sidebar and themed dialogs
@@ -24,7 +22,6 @@ Download the latest release from the [Releases](https://github.com/whorne89/Cade
 ### Requirements
 
 - Python 3.12
-- Windows 10/11 (WASAPI loopback requires Windows)
 - [uv](https://docs.astral.sh/uv/) package manager
 
 ### Run from source
@@ -54,8 +51,7 @@ Output goes to `dist/Cadence/`.
 |-------|-----------|
 | UI | PySide6 (Qt for Python) |
 | Transcription | faster-whisper (Whisper, CPU, int8) |
-| Mic capture | sounddevice |
-| System audio | PyAudioWPatch (WASAPI loopback) |
+| Audio capture | sounddevice |
 | Build | PyInstaller |
 
 ## License

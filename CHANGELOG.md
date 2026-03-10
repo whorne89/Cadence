@@ -5,13 +5,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [3.0.0] - Unreleased
 
+### Added
+- **"Meeting with" participant button** — Tag transcripts with who the meeting was with. Saved as `Participant:` header in transcript files.
+
 ### Changed
 - **Single-stream transcription:** Replaced dual-channel mic + system audio capture with single microphone stream. All audio is captured through the mic, simplifying the pipeline and improving reliability.
 - **Removed echo cancellation pipeline:** Echo gate, echo diagnostics, AEC (Wiener filter), and all cross-channel dedup logic removed. No longer needed with single-stream capture.
 - **Removed speaker attribution:** Transcripts no longer label segments as "You" or "Speaker". All segments are plain timestamped text.
 - **Simplified settings:** Removed system audio device selector and echo debug options from Settings dialog.
 - **Simplified metrics:** Activity dashboard shows 6 cards (removed per-speaker word counts).
-- **Backward-compatible transcript loading:** Old transcripts with "You:"/"Speaker:"/"Them:" prefixes are loaded correctly with prefixes stripped.
+- **Backward-compatible transcript loading:** Old transcripts with "You:"/"Speaker:"/"Them:" prefixes are loaded correctly with prefixes stripped. Old "Speaker:" headers read as participant name.
 
 ### Removed
 - `echo_gate.py` — Echo detection, deduplication, clause recovery
@@ -19,7 +22,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 - PyAudioWPatch dependency (WASAPI loopback no longer needed)
 - scipy dependency (was used for system audio resampling)
 - System audio device configuration
-- Speaker name button in transcript viewer
+- Per-speaker name button (replaced by "Meeting with" participant button)
 - Echo diagnostics and echo gate logging debug options
 
 ## [2.2.0] - 2026-03-03
